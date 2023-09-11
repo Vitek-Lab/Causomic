@@ -6,7 +6,7 @@ import copy
 
 from y0.graph import NxMixedGraph
 from y0.algorithm.simplify_latent import simplify_latent_dag
-from y0.identify import is_identifiable
+from y0.algorithm.identify import Identification, identify
 from y0.dsl import P, Variable
 
 import matplotlib.pyplot as plt
@@ -167,10 +167,10 @@ class GraphBuilder:
         not_identify = list()
         i=1
         for pair in potential_nodes:
-            is_ident = is_identifiable(self.causal_graph, P(pair[1] @ pair[0]))
-            if is_ident:
+            try:
+                is_ident = Identification.from_expression(graph=self.causal_graph, query=P(pair[1] @ pair[0]))
                 identify.append((pair[0], pair[1]))
-            else:
+            except:
                 not_identify.append((pair[0], pair[1]))
 
             print(i)
