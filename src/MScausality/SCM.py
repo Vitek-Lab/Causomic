@@ -54,8 +54,8 @@ def scm_model(data, root_nodes, downstream_nodes, missing): #TODO: add priors an
                                                                                       intercept_scale))
 
         for item in items:
-            coef_loc = pyro.param(f'{node_name}_coef_loc', torch.tensor(0.))
-            coef_scale = pyro.param(f'{node_name}_coef_scale', torch.tensor(2.))
+            coef_loc = pyro.param(f'{node_name}_{item}_coef_loc', torch.tensor(0.))
+            coef_scale = pyro.param(f'{node_name}_{item}_coef_scale', torch.tensor(2.))
 
             downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
                                                                                 dist.Normal(coef_loc, coef_scale))
@@ -162,7 +162,7 @@ class SCM:
     def fit_scm(self):
 
         # filled_data = self.obs_data.fillna(15.)
-        filled_data = self.obs_data.iloc[:20,:] #367)
+        filled_data = self.obs_data.iloc[:400,:] #367)
         data = dict()
         missing = dict()
         for i in filled_data.columns:
@@ -193,11 +193,12 @@ class SCM:
         print("starting training")
         for step in range(n_steps):
             loss = svi.step(data, self.root_nodes, self.descendent_nodes, missing)
-            if step % 10 == 0:
-                print(loss)
+            # if step % 10 == 0:
+            print(loss)
 
         print("tracker")
         params = [i for i in pyro.get_param_store().items()]
+        print(params)
         # num_samples = 100
         # predictive = Predictive(scm_model, guide=guide, num_samples=num_samples)
         # svi_samples = {k: v.reshape(num_samples).detach().cpu().numpy()
