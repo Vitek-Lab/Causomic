@@ -5,24 +5,16 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 import pandas as pd
 from graph import GraphBuilder
-import networkx as nx
 import pickle
-
-# import numpyro
-# from numpyro.infer import MCMC, NUTS
-# from numpyro.distributions import constraints
-# numpyro.set_platform('cpu')
-# numpyro.set_host_device_count(4)
-
-# from jax import random
-# from jax import numpy as jnp
 
 import pyro
 import pyro.distributions as dist
-from pyro.infer.autoguide import AutoDiagonalNormal
+from pyro.distributions import constraints
+
+from pyro.infer.autoguide import AutoNormal
 from pyro.optim import Adam
-from pyro.infer import SVI, Trace_ELBO, Predictive
-from pyro.infer import MCMC, NUTS, Predictive
+from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import MCMC, NUTS
 
 import torch
 
@@ -38,8 +30,9 @@ def scm_model(data, root_nodes, downstream_nodes, missing): #TODO: add priors an
     downstream_coef_dict_scale = dict()
 
     for node_name in root_nodes:
-        loc = pyro.param(f'{node_name}_mean_param', torch.tensor(10.))
-        scale = pyro.param(f'{node_name}_scale_param', torch.tensor(10.))
+        loc = pyro.param(f'{node_name}_mean_param', torch.tensor(10.),
+                        constraint=constraints.positive)
+        scale = pyro.param(f'{node_name}_scale_param', torch.tensor(2.))
 
         root_coef_dict_mean[node_name] = pyro.sample(f"{node_name}_mean", dist.Normal(loc, 2))
         root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale", dist.Exponential(scale))
@@ -47,7 +40,8 @@ def scm_model(data, root_nodes, downstream_nodes, missing): #TODO: add priors an
     for node_name, items in downstream_nodes.items():
 
         intercept_loc = pyro.param(f'{node_name}_int_loc', torch.tensor(0.))
-        intercept_scale = pyro.param(f'{node_name}_int_scale', torch.tensor(2.))
+        intercept_scale = pyro.param(f'{node_name}_int_scale', torch.tensor(2.),
+                                     constraint=constraints.positive)
 
         downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(f"{node_name}_intercept",
                                                                           dist.Normal(intercept_loc,
@@ -55,7 +49,8 @@ def scm_model(data, root_nodes, downstream_nodes, missing): #TODO: add priors an
 
         for item in items:
             coef_loc = pyro.param(f'{node_name}_{item}_coef_loc', torch.tensor(0.))
-            coef_scale = pyro.param(f'{node_name}_{item}_coef_scale', torch.tensor(2.))
+            coef_scale = pyro.param(f'{node_name}_{item}_coef_scale', torch.tensor(2.),
+                                    constraint=constraints.positive)
 
             downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
                                                                                 dist.Normal(coef_loc, coef_scale))
@@ -179,13 +174,16 @@ class SCM:
         # samples_fully_pooled = mcmc.get_samples()
 
         # set up the optimizer
-        adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
-        optimizer = Adam(adam_params)
+        num_steps = 1000
+        initial_lr = 0.001
+        gamma = 0.01  # final learning rate will be gamma * initial_lr
+        lrd = gamma ** (1 / num_steps)
+        optim = pyro.optim.ClippedAdam({'lr': initial_lr, 'lrd': lrd})
 
-        guide = AutoDiagonalNormal(scm_model)
+        guide = AutoNormal(scm_model)
 
         # setup the inference algorithm
-        svi = SVI(scm_model, guide, optimizer, loss=Trace_ELBO())
+        svi = SVI(scm_model, guide, optim, loss=Trace_ELBO())
 
         n_steps = 5000
 
@@ -193,8 +191,8 @@ class SCM:
         print("starting training")
         for step in range(n_steps):
             loss = svi.step(data, self.root_nodes, self.descendent_nodes, missing)
-            # if step % 10 == 0:
-            print(loss)
+            if step % 10 == 0:
+                print(loss)
 
         print("tracker")
         params = [i for i in pyro.get_param_store().items()]
