@@ -1,0 +1,2 @@
+source_hgnc_id	source_hgnc_symbol	relation	target_hgnc_id	target_hgnc_symbol	stmt_hash	evidence_count	source_counts
+31486	MIRLET7I	DecreaseAmount	4983	HMGB1	22201695284170262	1	"{""medscan"": 1}"
