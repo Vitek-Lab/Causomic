@@ -56,6 +56,8 @@ class GraphBuilder:
                                                               "target",
                                                               "evidence_count",
                                                               "relation"]]
+        # self.indra_statements = self.indra_statements[((-self.indra_statements["source"] == "") |
+        #                                               (-self.indra_statements["target"] == ""))]
 
         self.indra_statements = self.indra_statements.groupby(
             ["source", "target", "relation"])["evidence_count"].sum().reset_index()
@@ -82,6 +84,8 @@ class GraphBuilder:
 
         # Remove cycles
         cycles = list(nx.simple_cycles(graph))
+        print(len(cycles))
+        print(len(graph.edges))
         graph = remove_cycles(graph, self.indra_statements, cycles,
                               self.raw_indra_statements, self.experimental_data)
         return graph
@@ -173,7 +177,7 @@ class GraphBuilder:
             except:
                 not_identify.append((pair[0], pair[1]))
 
-            print(i)
+            # print(i)
             i+=1
 
         self.identified_edges = {"Identifiable": identify, "NonIdentifiable": not_identify}
@@ -211,8 +215,11 @@ class GraphBuilder:
 
 def remove_cycles(graph, indra_stmts, cycles,
                   raw_indra_stmts, experimental_data):
-    
-    for i in range(len(cycles)):
+    cycles = list(nx.simple_cycles(graph))
+    cycle_checker = True
+    counter = 0
+    while cycle_checker:
+        i=0
         if len(cycles[i]) == 2:
             edges = indra_stmts[
                 ((indra_stmts["source"] == cycles[i][0]) &
@@ -230,8 +237,12 @@ def remove_cycles(graph, indra_stmts, cycles,
 
             # drop edge with less evidence
             if edges.loc[0, "evidence_count"] != edges.loc[1, "evidence_count"]:
-                graph.remove_edge(edges.loc[1, "source"],
-                                  edges.loc[1, "target"])
+                try:
+                    graph.remove_edge(edges.loc[1, "source"],
+                                      edges.loc[1, "target"])
+                    counter+=1
+                except:
+                    pass
             elif edges.loc[0, "source_measured"] & \
                     edges.loc[0, "target_measured"]:
                 cycle_data = experimental_data.loc[:, [edges.loc[0, "source"], edges.loc[0, "target"]]]
@@ -251,14 +262,20 @@ def remove_cycles(graph, indra_stmts, cycles,
                         try:
                             graph.remove_edge(edges_to_drop.loc[edge, "source"],
                                               edges_to_drop.loc[edge, "target"])
+                            counter += 1
                         except nx.exception.NetworkXError:
                             pass
             else:
                 # TODO: test how many times this actually happens
-                graph.remove_edge(edges.loc[0, "source"],
-                                  edges.loc[0, "target"])
-                graph.remove_edge(edges.loc[1, "source"],
-                                  edges.loc[1, "target"])
+                try:
+                    graph.remove_edge(edges.loc[0, "source"],
+                                      edges.loc[0, "target"])
+                    graph.remove_edge(edges.loc[1, "source"],
+                                      edges.loc[1, "target"])
+                    counter += 2
+                    print("yes")
+                except:
+                    pass
 
         else:
             evidence_in_cycle = dict()
@@ -275,9 +292,7 @@ def remove_cycles(graph, indra_stmts, cycles,
                     (indra_stmts["target"] == target_node)
                     ].reset_index(drop=True)
 
-                if stmt.loc[0, "source_measured"] & \
-                    stmt.loc[0, "target_measured"]:
-                    evidence_in_cycle[
+                evidence_in_cycle[
                         (source_node, target_node)
                         ] = stmt.loc[0, "evidence_count"]
 
@@ -285,18 +300,40 @@ def remove_cycles(graph, indra_stmts, cycles,
             min_evidence_node = [k for k, v in evidence_in_cycle.items() \
                                  if v == min(evidence_in_cycle.values())]
             if len(min_evidence_node) == 1:
-                graph.remove_edge(min_evidence_node[0][0],
-                                  min_evidence_node[0][1])
+                try:
+                    graph.remove_edge(min_evidence_node[0][0],
+                                      min_evidence_node[0][1])
+                    counter += 1
+                except:
+                    pass
             else:
                 cycle_correlations = dict()
                 for i in range(len(min_evidence_node)):
-                    cycle_data = experimental_data.loc[:, [min_evidence_node[i][0], min_evidence_node[i][1]]]
-                    cycle_correlations[min_evidence_node[i]] = cycle_data.corr().iloc[0,1]
-
-                min_corr_node = min(cycle_correlations, key=lambda y: abs(cycle_correlations[y]))
-                graph.remove_edge(min_corr_node[0],
-                                  min_corr_node[1])
-
+                    try:
+                        cycle_data = experimental_data.loc[:, [min_evidence_node[i][0], min_evidence_node[i][1]]]
+                        cycle_correlations[min_evidence_node[i]] = cycle_data.corr().iloc[0,1]
+                        counter += 1
+                    except:
+                        pass
+                if len(cycle_correlations) > 0:
+                    min_corr_node = min(cycle_correlations, key=lambda y: abs(cycle_correlations[y]))
+                    try:
+                        graph.remove_edge(min_corr_node[0],
+                                          min_corr_node[1])
+                        counter += 1
+                    except:
+                        pass
+                else:
+                    try:
+                        graph.remove_edge(min_evidence_node[0][0],
+                                          min_evidence_node[0][1])
+                        counter += 1
+                    except:
+                        pass
+        cycles = list(nx.simple_cycles(graph))
+        if len(cycles) == 0:
+            cycle_checker = False
+            print(counter)
     return graph
 
 def add_low_evidence_edges(graph, indra_stmts, experimental_data, min_corr = .5):
@@ -311,7 +348,8 @@ def add_low_evidence_edges(graph, indra_stmts, experimental_data, min_corr = .5)
         source_measured = potential_edges.loc[i, "source"] in experimental_data.columns
         target_measured = potential_edges.loc[i, "target"] in experimental_data.columns
 
-        if (not edge_in_graph) & (source_measured & target_measured):
+        if (not edge_in_graph) & (source_measured & target_measured) & \
+                (potential_edges.loc[i, "source"] != potential_edges.loc[i, "target"]):
             obs_corr = experimental_data.loc[:, [potential_edges.loc[i, "source"],
                                 potential_edges.loc[i, "target"]]].corr().iloc[0, 1]
             if (abs(obs_corr) > min_corr) & \
@@ -338,7 +376,9 @@ def add_low_evidence_edges(graph, indra_stmts, experimental_data, min_corr = .5)
 def main():
 
     experimental_data = pd.read_csv("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/MS_data/Single_cell/Leduc/MSstats/MSstats_summarized.csv")
-    indra_statements = pd.read_csv("../../data/sox_pathway.csv")
+    indra_statements = pd.read_csv("../../data/real_data/full_confound_edges.tsv", sep="\t")
+    indra_statements = indra_statements[(-pd.isna(indra_statements["source_hgnc_symbol"])) &
+                                        (-pd.isna(indra_statements["target_hgnc_symbol"]))]
 
     graph = GraphBuilder(indra_statements, experimental_data)
     graph.build(data_type="TMT",
@@ -346,8 +386,12 @@ def main():
                 evidence_filter=1,
                 source_name="source_hgnc_symbol",
                 target_name="target_hgnc_symbol")
+    print("graph built")
     graph.create_latent_graph()
+    print("latent graph created")
     graph.find_all_identifiable_pairs()
+    print("identifiable pairs found")
+    print(graph.identified_edges['NonIdentifiable'])
     graph.plot_latent_graph(figure_size=(12, 8))
 
 if __name__ == "__main__":
