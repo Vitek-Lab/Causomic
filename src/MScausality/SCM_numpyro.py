@@ -12,6 +12,8 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 from numpyro.distributions import constraints
+from numpyro import handlers
+
 numpyro.set_platform('cpu')
 numpyro.set_host_device_count(4)
 from operator import attrgetter
@@ -23,8 +25,6 @@ from jax import random
 
 def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
 
-    key = np.random.randint(-1000000, 1000000)
-
     root_coef_dict_mean = dict()
     root_coef_dict_scale = dict()
 
@@ -33,144 +33,148 @@ def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
 
     for node_name in root_nodes:
 
-        if learned_params is None:
-            root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean", dist.Normal(10., 5.))
-            root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale", dist.Exponential(.2))
-        else:
-            root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean",
-                                                         dist.Normal(learned_params[f"{node_name}_mean_mean_param"],
-                                                                     learned_params[f"{node_name}_mean_scale_param"]),
-                                                            rng_key=random.PRNGKey(key))
-
-            root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale",
-                                                          dist.Exponential(learned_params[f"{node_name}_scale_param"]),
-                                                             rng_key=random.PRNGKey(key))
+        root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean", dist.Normal(10., 5.))
+        root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale", dist.Exponential(.2))
 
     for node_name, items in downstream_nodes.items():
 
-        if learned_params is None:
-            downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
-                                                                              dist.Normal(0., 10.))
-        else:
-            downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
-                                                              dist.Normal(learned_params[f"{node_name}_intercept_mean_param"],
-                                                              learned_params[f"{node_name}_intercept_scale_param"]),
-                                                                                 rng_key=random.PRNGKey(key))
+        downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
+                                                                          dist.Normal(0., 10.))
 
         for item in items:
 
-            if learned_params is None:
-                downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
-                                                                                    dist.Normal(0., 2.))
-            else:
-                downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
-                                                        dist.Normal(learned_params[f"{node_name}_{item}_coef_mean_param"],
-                                                                    learned_params[f"{node_name}_{item}_coef_scale_param"]),
-                                                            rng_key=random.PRNGKey(key))
+            downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
+                                                                                dist.Normal(0., 2.))
 
-        if learned_params is None:
-            downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
-                                                                           dist.Exponential(1.))
-        else:
-            downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
-                                                           dist.Exponential(learned_params[f"{node_name}_scale_param"]),
-                                                            rng_key=random.PRNGKey(key))
+        downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
+                                                                       dist.Exponential(1.))
+
 
     # Dictionary to store the Pyro root distribution objects
     downstream_distributions = dict()
-    if data is not None:
-        # Create Pyro Normal distributions for each node
-        for node_name in root_nodes:
 
-            # Create a Normal distribution object
-            if "latent" in node_name:
-                root_sample = numpyro.sample(f"{node_name}", dist.Normal(root_coef_dict_mean[node_name],
-                                                                      root_coef_dict_scale[node_name]
-                                                                         ).expand([data[list(data.keys())[0]].shape[0]]))
-            else:
+    # Create Pyro Normal distributions for each node
+    for node_name in root_nodes:
 
-                imp = numpyro.sample(
-                    f"imp_{node_name}", dist.Normal(
-                        root_coef_dict_mean[node_name] - (2*root_coef_dict_scale[node_name]),
-                        root_coef_dict_scale[node_name]).expand([sum(missing[node_name] == 1)]).mask(False)
-                )
-
-                observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
-
-                root_sample = numpyro.sample(f"{node_name}",
-                                          dist.Normal(root_coef_dict_mean[node_name],
-                                                      root_coef_dict_scale[node_name]
-                                                      ).expand([data[list(data.keys())[0]].shape[0]]),
-                                          obs=observed)
-
-            # Store the distribution in the dictionary
-            downstream_distributions[node_name] = root_sample
-
-        # Create pyro linear regression obj for each downstream node
-        for node_name, items in downstream_nodes.items():
-
-            # calculate mean as sum of upstream items
-            mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-            for item in items:
-                coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-                mean = mean + coef*downstream_distributions[item]
-
-            # Define scale
-            scale = downstream_coef_dict_scale[f"{node_name}_scale"]
+        # Create a Normal distribution object
+        if "latent" in node_name:
+            root_sample = numpyro.sample(f"{node_name}", dist.Normal(root_coef_dict_mean[node_name],
+                                                                  root_coef_dict_scale[node_name]
+                                                                     ).expand([data[list(data.keys())[0]].shape[0]]))
+        else:
 
             imp = numpyro.sample(
                 f"imp_{node_name}", dist.Normal(
-                    mean[missing[node_name] == 1] - (2*scale),
-                    scale).mask(False)
+                    root_coef_dict_mean[node_name] - (2*root_coef_dict_scale[node_name]),
+                    root_coef_dict_scale[node_name]).expand([sum(missing[node_name] == 1)]).mask(False)
             )
 
             observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
-            # data[node_name][missing[node_name]] = imp[missing[node_name]].to(torch.double)
 
-            # Create a Normal distribution object
-            downstream_sample = numpyro.sample(f"{node_name}",
-                                            dist.Normal(mean, scale),
-                                            obs=observed)
+            root_sample = numpyro.sample(f"{node_name}",
+                                      dist.Normal(root_coef_dict_mean[node_name],
+                                                  root_coef_dict_scale[node_name]
+                                                  ).expand([data[list(data.keys())[0]].shape[0]]),
+                                      obs=observed)
 
-            # Store the distribution in the dictionary
-            downstream_distributions[node_name] = downstream_sample
-    else:
-        for node_name in root_nodes:
+        # Store the distribution in the dictionary
+        downstream_distributions[node_name] = root_sample
 
-            # Create a Normal distribution object
-            if "latent" in node_name:
-                root_sample = numpyro.sample(f"{node_name}",
-                                          dist.Normal(root_coef_dict_mean[node_name],
-                                                      root_coef_dict_scale[node_name]),
-                                             rng_key=random.PRNGKey(key))
-            else:
-                root_sample = numpyro.sample(f"{node_name}",
-                                          dist.Normal(root_coef_dict_mean[node_name],
-                                                      root_coef_dict_scale[node_name]),
-                                             rng_key=random.PRNGKey(key))
+    # Create pyro linear regression obj for each downstream node
+    for node_name, items in downstream_nodes.items():
 
-            # Store the distribution in the dictionary
-            downstream_distributions[node_name] = root_sample
+        # calculate mean as sum of upstream items
+        mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
+        for item in items:
+            coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
+            mean = mean + coef*downstream_distributions[item]
 
-        # Create pyro linear regression obj for each downstream node
-        for node_name, items in downstream_nodes.items():
+        # Define scale
+        scale = downstream_coef_dict_scale[f"{node_name}_scale"]
 
-            # calculate mean as sum of upstream items
-            mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-            for item in items:
-                coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-                mean = mean + coef*downstream_distributions[item]
+        imp = numpyro.sample(
+            f"imp_{node_name}", dist.Normal(
+                mean[missing[node_name] == 1] - (2*scale),
+                scale).mask(False)
+        )
 
-            # Define scale
-            scale = downstream_coef_dict_scale[f"{node_name}_scale"]
+        observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
+        # data[node_name][missing[node_name]] = imp[missing[node_name]].to(torch.double)
 
-            # Create a Normal distribution object
-            downstream_sample = numpyro.sample(f"{node_name}",
-                                            dist.Normal(mean, scale),
-                                               rng_key=random.PRNGKey(key))
+        # Create a Normal distribution object
+        downstream_sample = numpyro.sample(f"{node_name}",
+                                        dist.Normal(mean, scale),
+                                        obs=observed)
 
-            # Store the distribution in the dictionary
-            downstream_distributions[node_name] = downstream_sample
+        # Store the distribution in the dictionary
+        downstream_distributions[node_name] = downstream_sample
+
+    return downstream_distributions
+
+def int_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
+
+    root_coef_dict_mean = dict()
+    root_coef_dict_scale = dict()
+
+    downstream_coef_dict_mean = dict()
+    downstream_coef_dict_scale = dict()
+
+    # with handlers.seed(rng_seed=np.random.randint(-100000, 100000)):
+    for node_name in root_nodes:
+        root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean",
+                                                        dist.Normal(learned_params[f"{node_name}_mean_mean_param"],
+                                                                    learned_params[f"{node_name}_mean_scale_param"]))
+
+        root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale",
+                                                         dist.Exponential(learned_params[f"{node_name}_scale_param"]))
+
+    for node_name, items in downstream_nodes.items():
+
+        downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
+                                                                             dist.Normal(
+                                                              learned_params[f"{node_name}_intercept_mean_param"],
+                                                              learned_params[f"{node_name}_intercept_scale_param"]))
+
+        for item in items:
+
+            downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
+                                                                                   dist.Normal(
+                                                               learned_params[f"{node_name}_{item}_coef_mean_param"],
+                                                               learned_params[f"{node_name}_{item}_coef_scale_param"]))
+
+
+        downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
+                                                       dist.Exponential(learned_params[f"{node_name}_scale_param"]))
+
+    downstream_distributions = dict()
+    for node_name in root_nodes:
+
+
+        root_sample = numpyro.sample(f"{node_name}",
+                                  dist.Normal(root_coef_dict_mean[node_name],
+                                              root_coef_dict_scale[node_name]))
+
+        # Store the distribution in the dictionary
+        downstream_distributions[node_name] = root_sample
+
+    # Create pyro linear regression obj for each downstream node
+    for node_name, items in downstream_nodes.items():
+
+        # calculate mean as sum of upstream items
+        mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
+        for item in items:
+            coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
+            mean = mean + coef*downstream_distributions[item]
+
+        # Define scale
+        scale = downstream_coef_dict_scale[f"{node_name}_scale"]
+
+        # Create a Normal distribution object
+        downstream_sample = numpyro.sample(f"{node_name}",
+                                        dist.Normal(mean, scale))
+
+        # Store the distribution in the dictionary
+        downstream_distributions[node_name] = downstream_sample
     return downstream_distributions
 
 class SCM: ## TODO: rename to LVM? LVSCM?
@@ -187,6 +191,7 @@ class SCM: ## TODO: rename to LVM? LVSCM?
         ancestors = {i: list(self.causal_graph.ancestors_inclusive(i)) for i in sorted_nodes}
 
         # Find starting nodes
+        print("Finding root nodes...")
         root_nodes = [i for i in sorted_nodes if len(ancestors[i]) == 1]
         descendent_nodes = [i for i in sorted_nodes if len(ancestors[i]) != 1]
 
@@ -201,6 +206,7 @@ class SCM: ## TODO: rename to LVM? LVSCM?
         latent_nodes = ["latent_{}".format(i) for i in range(len(latent_edges))]
 
         # Add in latent confounders to descendent nodes
+        print("Adding latent confounders to graph...")
         for i in range(len(latent_nodes)):
             root_nodes.append(latent_nodes[i])
             for node in latent_edges[i]:
@@ -258,8 +264,8 @@ class SCM: ## TODO: rename to LVM? LVSCM?
 
     def fit_scm(self, num_samples=1000, warmup_steps=1000, num_chains=4):
 
-        # filled_data = self.obs_data.fillna(15.)
-        filled_data = self.obs_data.iloc[:,:] #367)
+        print("Determining missing obs...")
+        filled_data = self.obs_data
         data = dict()
         missing = dict()
         for i in filled_data.columns:
@@ -267,8 +273,8 @@ class SCM: ## TODO: rename to LVM? LVSCM?
             missing[i] = np.array(filled_data[i].isna().values)
 
         # if algorithm == "MCMC":
-
-        mcmc = MCMC(NUTS(scm_model), num_warmup =warmup_steps, num_samples =num_samples, num_chains =num_chains)
+        print("Running MCMC...")
+        mcmc = MCMC(NUTS(scm_model), num_warmup=warmup_steps, num_samples=num_samples, num_chains=num_chains)
         mcmc.run(random.PRNGKey(0), data, self.root_nodes, self.descendent_nodes, missing)
         self.compile_model_stats(mcmc)
 
@@ -282,6 +288,7 @@ class SCM: ## TODO: rename to LVM? LVSCM?
             # mcmc.run(data, self.root_nodes, self.descendent_nodes, missing)
             #
         self.model = scm_model
+        self.int_model = int_model
         self.mcmc = mcmc
             #
         sample_keys = list(mcmc.get_samples().keys())
@@ -299,15 +306,28 @@ class SCM: ## TODO: rename to LVM? LVSCM?
         # else:
         #     raise ValueError("Please choose a valid algorithm: MCMC or SVI")
 
-    def intervention(self, intervention_node, outcome_node, intervention_value, n=1000):
+    def intervention(self, intervention_node, outcome_node, intervention_value, n=1000,
+                     return_all = False):
 
         # Posterior samples
-        post_samples = [self.model(None, self.root_nodes, self.descendent_nodes,
-                                   [], self.learned_params) for _ in range(n)]
+        if return_all:
+            post_samples = [numpyro.handlers.seed(self.int_model, np.random.randint(-1*10**10, 1*10**10)
+                                                  )(None, self.root_nodes, self.descendent_nodes,
+                                       [], self.learned_params) for i in range(n)]
 
-        intervened_model = numpyro.handlers.do(self.model, data={intervention_node: intervention_value})
-        int_samples = [intervened_model(None, self.root_nodes, self.descendent_nodes,
-                                        [], self.learned_params)[outcome_node] for _ in range(n)]
+            intervened_model = numpyro.handlers.do(self.int_model, data={intervention_node: intervention_value})
+            int_samples = [numpyro.handlers.seed(intervened_model, np.random.randint(-1*10**10, 1*10**10)
+                                                 )(None, self.root_nodes, self.descendent_nodes,
+                                            [], self.learned_params) for i in range(n)]
+        else:
+            post_samples = [numpyro.handlers.seed(self.int_model, np.random.randint(-1*10**10, 1*10**10)
+                                                  )(None, self.root_nodes, self.descendent_nodes,
+                                       [], self.learned_params)[outcome_node] for i in range(n)]
+
+            intervened_model = numpyro.handlers.do(self.int_model, data={intervention_node: intervention_value})
+            int_samples = [numpyro.handlers.seed(intervened_model, np.random.randint(-1*10**10, 1*10**10)
+                                                 )(None, self.root_nodes, self.descendent_nodes,
+                                            [], self.learned_params)[outcome_node] for i in range(n)]
 
         self.posterior_samples = post_samples
         self.intervention_samples = int_samples

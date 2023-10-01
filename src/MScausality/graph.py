@@ -9,6 +9,8 @@ from y0.algorithm.simplify_latent import simplify_latent_dag
 from y0.algorithm.identify import Identification, identify
 from y0.dsl import P, Variable
 
+import pickle
+
 import matplotlib.pyplot as plt
 
 class GraphBuilder:
@@ -83,8 +85,9 @@ class GraphBuilder:
         graph.remove_edges_from(nx.selfloop_edges(graph))
 
         # Remove cycles
-        cycles = list(nx.simple_cycles(graph))
-        print(len(cycles))
+        # cycles = list(nx.simple_cycles(graph))
+        cycles=None
+        # print(len(cycles))
         print(len(graph.edges))
         graph = remove_cycles(graph, self.indra_statements, cycles,
                               self.raw_indra_statements, self.experimental_data)
@@ -97,21 +100,27 @@ class GraphBuilder:
               source_name="",
               target_name=""):
 
-
+        print("Preparing experimental data...")
         self.prep_experimental_data(data_type, protein_format)
 
+        print("Preparing INDRA statements...")
         self.prep_indra_stmts(evidence_filter, source_name, target_name)
 
+        print("Building graph...")
         graph = nx.from_pandas_edgelist(self.indra_statements, 
                                         source='source',
                                         target='target', 
                                         edge_attr=None, 
                                         create_using=nx.DiGraph())
-        
+
+        print("Fixing cycles...")
         graph = self.fix_cycles(graph)
+
+        print("Adding low evidence edges...")
         graph = add_low_evidence_edges(graph,
                                        self.raw_indra_statements,
-                                       self.experimental_data)
+                                       self.experimental_data,
+                                       evidence_filter)
 
         self.graph = graph
 
@@ -150,7 +159,20 @@ class GraphBuilder:
         y0_graph = NxMixedGraph()
         y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
 
-        y0_graph = y0_graph.from_latent_variable_dag(self.graph, "hidden")
+        # y0_graph = y0_graph.from_latent_variable_dag(self.graph, "hidden")
+
+        nodes = list(y0_graph.nodes())
+        directed_edges = list(y0_graph.directed.edges())
+        remove = list()
+        ## Remove node if it isnt in directed edges
+        for node in nodes:
+            found = [item for item in directed_edges if ((item[0] == node) | (item[1] == node))]
+            print(found)
+            if len(found) == 0:
+                remove.append(node)
+
+        y0_graph = y0_graph.remove_nodes_from(remove)
+
         self.causal_graph = y0_graph
 
     def find_all_identifiable_pairs(self):
@@ -215,23 +237,31 @@ class GraphBuilder:
 
 def remove_cycles(graph, indra_stmts, cycles,
                   raw_indra_stmts, experimental_data):
-    cycles = list(nx.simple_cycles(graph))
-    cycle_checker = True
+    try:
+        cycles = nx.find_cycle(graph)
+        cycles = list(sum(cycles, ()))
+        indexes = np.unique(cycles, return_index=True)[1]
+        cycles = [cycles[index] for index in sorted(indexes)]
+        print(cycles)
+        cycle_checker = True
+    except nx.exception.NetworkXNoCycle:
+        cycle_checker = False
+        print(0)
+
     counter = 0
     while cycle_checker:
-        i=0
-        if len(cycles[i]) == 2:
+        if len(cycles) == 2:
             edges = indra_stmts[
-                ((indra_stmts["source"] == cycles[i][0]) &
-                 (indra_stmts["target"] == cycles[i][1])) |
-                ((indra_stmts["source"] == cycles[i][1]) &
-                  (indra_stmts["target"] == cycles[i][0]))]
+                ((indra_stmts["source"] == cycles[0]) &
+                 (indra_stmts["target"] == cycles[1])) |
+                ((indra_stmts["source"] == cycles[1]) &
+                  (indra_stmts["target"] == cycles[0]))]
 
             edges_raw = raw_indra_stmts[
-                ((raw_indra_stmts["source"] == cycles[i][0]) &
-                 (raw_indra_stmts["target"] == cycles[i][1])) |
-                ((raw_indra_stmts["source"] == cycles[i][1]) &
-                 (raw_indra_stmts["target"] == cycles[i][0]))]
+                ((raw_indra_stmts["source"] == cycles[0]) &
+                 (raw_indra_stmts["target"] == cycles[1])) |
+                ((raw_indra_stmts["source"] == cycles[1]) &
+                 (raw_indra_stmts["target"] == cycles[0]))]
             
             edges = edges.sort_values(by="evidence_count", ascending=False).reset_index(drop=True)
 
@@ -279,22 +309,26 @@ def remove_cycles(graph, indra_stmts, cycles,
 
         else:
             evidence_in_cycle = dict()
-            for node in range(len(cycles[i])):
+            for node in range(len(cycles)):
                 
-                source_node = cycles[i][node]
-                if node+1 < len(cycles[i]):    
-                    target_node = cycles[i][node + 1]
+                source_node = cycles[node]
+                if node+1 < len(cycles):
+                    target_node = cycles[node + 1]
                 else:
-                    target_node = cycles[i][0]
+                    target_node = cycles[0]
 
                 stmt = indra_stmts[
                     (indra_stmts["source"] == source_node) &
                     (indra_stmts["target"] == target_node)
                     ].reset_index(drop=True)
-
-                evidence_in_cycle[
+                try:
+                    evidence_in_cycle[
+                            (source_node, target_node)
+                            ] = stmt.loc[0, "evidence_count"]
+                except:
+                    evidence_in_cycle[
                         (source_node, target_node)
-                        ] = stmt.loc[0, "evidence_count"]
+                    ] = 1000
 
             # Get all keys with minimum value in dictionary
             min_evidence_node = [k for k, v in evidence_in_cycle.items() \
@@ -330,15 +364,22 @@ def remove_cycles(graph, indra_stmts, cycles,
                         counter += 1
                     except:
                         pass
-        cycles = list(nx.simple_cycles(graph))
-        if len(cycles) == 0:
+        try:
+            cycles = nx.find_cycle(graph)
+            cycles = list(sum(cycles, ()))
+            indexes = np.unique(cycles, return_index=True)[1]
+            cycles = [cycles[index] for index in sorted(indexes)]
+            print("cycle removed")
+            print(cycles)
+        except nx.exception.NetworkXNoCycle:
             cycle_checker = False
             print(counter)
+
     return graph
 
-def add_low_evidence_edges(graph, indra_stmts, experimental_data, min_corr = .5):
+def add_low_evidence_edges(graph, indra_stmts, experimental_data, evidence, min_corr = .5):
 
-    potential_edges = indra_stmts[indra_stmts["evidence_count"] == 1].reset_index(drop=True)
+    potential_edges = indra_stmts[indra_stmts["evidence_count"] <= evidence].reset_index(drop=True)
     potential_edges = potential_edges.loc[:,
                       ["source", "target", "relation"]].drop_duplicates(ignore_index=True)
     test_adds = 0
@@ -375,47 +416,29 @@ def add_low_evidence_edges(graph, indra_stmts, experimental_data, min_corr = .5)
 
 def main():
 
-    experimental_data = pd.read_csv("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/MS_data/Single_cell/Leduc/MSstats/MSstats_summarized.csv")
-    indra_statements = pd.read_csv("../../data/real_data/full_confound_edges.tsv", sep="\t")
+    # experimental_data = pd.read_csv/("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/MS_data/Single_cell/Leduc/MSstats/MSstats_summarized.csv")
+    experimental_data = pd.read_csv("/mnt/d/OneDrive - Northeastern University/Northeastern/Research/MS_data/Single_cell/Leduc/MSstats/MSstats_summarized.csv")
+    indra_statements = pd.read_csv("../../data/real_data/sox11_edges.tsv", sep="\t")
     indra_statements = indra_statements[(-pd.isna(indra_statements["source_hgnc_symbol"])) &
                                         (-pd.isna(indra_statements["target_hgnc_symbol"]))]
 
     graph = GraphBuilder(indra_statements, experimental_data)
     graph.build(data_type="TMT",
                 protein_format="UniProtKB_AC/ID",
-                evidence_filter=1,
+                evidence_filter=3,
                 source_name="source_hgnc_symbol",
                 target_name="target_hgnc_symbol")
     print("graph built")
     graph.create_latent_graph()
     print("latent graph created")
-    graph.find_all_identifiable_pairs()
+    # graph.find_all_identifiable_pairs()
     print("identifiable pairs found")
-    print(graph.identified_edges['NonIdentifiable'])
+    # print(graph.identified_edges['NonIdentifiable'])
     graph.plot_latent_graph(figure_size=(12, 8))
+
+    with open('../../data/real_data/sox11_graph_obj_new.pkl', 'wb') as f:
+        pickle.dump(graph, f)
 
 if __name__ == "__main__":
     main()
-            
-        
-# test = nx.DiGraph()
-# test.add_edge("X", "Y")
-# test.add_edge("C", "X")
-# test.add_edge("C", "Y")
-# all_nodes = ["X", "Y", "C"]
-# attrs = {node: (True if node not in ["X", "Y"] and node != "\\n" else False) for node in all_nodes}
-#
-# nx.set_node_attributes(test, attrs, name="hidden")
-# # simplified_graph = simplify_latent_dag(copy.deepcopy(test), "hidden")
-# y0_graph = NxMixedGraph()
-# y0_graph = y0_graph.from_latent_variable_dag(test)
-#
-# for node, data in test.nodes.items():
-#     print(node, data)
-#     print(data["hidden"])
-#     if data["hidden"]:
-#         for a, b in itt.combinations(test.successors(node), 2):
-#             print(a,b)
-#
-# is_identifiable(graph=y0_graph, query=P(Variable("Y") @ Variable("X")))
-#
+

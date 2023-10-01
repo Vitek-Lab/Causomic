@@ -12,6 +12,8 @@ def simulate_data(graph,
                   n_cells=3,
                   mar_missing_param=.05,
                   mnar_missing_param=[-3, .4],
+                  add_error=False,
+                  error_node=None,
                   n=1000,
                   seed=None):
     """Simulate data from a given graph.
@@ -33,6 +35,10 @@ def simulate_data(graph,
         The probability of missing data for missing at random (MAR) missingness.
     mnar_missing_param : list
         The parameters for missing not at random (MNAR) missingness.
+    add_error : bool
+        Whether to add extra measurement error to a node in the simulation.
+    error_node : str
+        The node to add extra measurement error to.
     n : int
         The number of samples to simulate.
     seed : int
@@ -51,8 +57,7 @@ def simulate_data(graph,
 
     data = dict()#pd.DataFrame(columns=graph.nodes())
 
-    sorted_nodes = [i for i in nx.topological_sort(graph)]
-    sorted_nodes.remove("cell_type")
+    sorted_nodes = [i for i in nx.topological_sort(graph) if i != "cell_type"]
 
     print("simulating data...")
     for node in sorted_nodes:
@@ -63,6 +68,9 @@ def simulate_data(graph,
         data["cell_type"] = np.repeat([i for i in range(n_cells)], n//n_cells)
         if len(data["cell_type"]) < n:
             data["cell_type"] = np.append(data["cell_type"], n_cells-1)
+
+    if add_error:
+        data[error_node] += np.random.normal(0, 5, n)
 
     # break data into features
     print("adding feature level data...")
