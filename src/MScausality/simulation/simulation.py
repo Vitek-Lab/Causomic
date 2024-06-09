@@ -132,6 +132,8 @@ def generate_node_coefficients(parents):
     else:
         coefficients["intercept"] = np.random.uniform(-5, 5)
 
+    coefficients["error"] = np.random.uniform(0,1)
+
     return coefficients
 
 def simulate_node(data, coefficients, n, cell_type):
@@ -286,30 +288,38 @@ def main():
     #     graph = pickle.load(pickle_file)
 
     ## Coefficients for relations
-    cell_coef = {'EGF': {'intercept': 18., "error": 3},
-                 'IGF': {'intercept': 17., "error": 3},
-                 'SOS': {'intercept': -4, "error": 1,
-                         'EGF': 0.6, 'IGF': 0.6, },
-                 'Ras': {'intercept': 5, "error": 1, 'SOS': .5, "cell_type": [3, 0, -3]},
-                 'PI3K': {'intercept': 1.6, "error": 1,
-                          'EGF': .5, 'IGF': 0.5, 'Ras': .5, },
-                 'Akt': {'intercept': 2., "error": 1, 'PI3K': 0.75, },
-                 'Raf': {'intercept': 2, "error": 1,
-                         'Ras': 0.8, 'Akt': -.4, "cell_type": [-2, 0, 2]},
-                 'Mek': {'intercept': 3., "error": 1, 'Raf': 0.75, "cell_type": [-2, 0, 2]},
-                 'Erk': {'intercept': 4., "error": 1, 'Mek': 1.2, "cell_type": [-2, 0, 2]}
-                 }
-    graph = build_igf_network(cell_confounder=True)
+    # cell_coef = {'EGF': {'intercept': 18., "error": 3},
+    #              'IGF': {'intercept': 17., "error": 3},
+    #              'SOS': {'intercept': -4, "error": 1,
+    #                      'EGF': 0.6, 'IGF': 0.6, },
+    #              'Ras': {'intercept': 5, "error": 1, 'SOS': .5, "cell_type": [3, 0, -3]},
+    #              'PI3K': {'intercept': 1.6, "error": 1,
+    #                       'EGF': .5, 'IGF': 0.5, 'Ras': .5, },
+    #              'Akt': {'intercept': 2., "error": 1, 'PI3K': 0.75, },
+    #              'Raf': {'intercept': 2, "error": 1,
+    #                      'Ras': 0.8, 'Akt': -.4, "cell_type": [-2, 0, 2]},
+    #              'Mek': {'intercept': 3., "error": 1, 'Raf': 0.75, "cell_type": [-2, 0, 2]},
+    #              'Erk': {'intercept': 4., "error": 1, 'Mek': 1.2, "cell_type": [-2, 0, 2]}
+    #              }
 
-    cell_sim = simulate_data(cell_type_graph, coefficients=cell_coef, include_missing=False,
-                             cell_type=True, n_cells=3, n=300, seed=0)
-    pass
-    # pickle_filename = '../../data/IGF_pathway/IGF_sim_data.pkl'
-    # with open(pickle_filename, 'wb') as pickle_file:
-    #     pickle.dump(sim_data, pickle_file)
-    #
-    # sim_data["Feature_data"].to_csv("../../data/IGF_pathway/feature_data.csv", index=False)
+    # graph = build_igf_network(cell_confounder=True)
 
+    graph = nx.DiGraph()
+
+    ## Add edges
+    graph.add_edge("A", "B")
+    graph.add_edge("B", "C")
+    graph.add_edge("E", "B")
+    graph.add_edge("E", "A")
+
+    sim_data = simulate_data(graph, include_missing=False,
+                             cell_type=False, n_cells=1, n=300, seed=0)
+    
+    pickle_filename = 'data/sim_data/four_node_sim.pkl'
+    with open(pickle_filename, 'wb') as pickle_file:
+        pickle.dump(sim_data, pickle_file)
+
+    sim_data["Feature_data"].to_csv("data/sim_data/four_node_feature_data.csv", index=False)
 
 if __name__ == "__main__":
     main()

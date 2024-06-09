@@ -1,0 +1,41 @@
+source_hgnc_id	source_hgnc_symbol	relation	target_hgnc_id	target_hgnc_symbol	stmt_hash	evidence_count	source_counts	reason_added	source_observed	target_observed
+4074	GABPB1	DecreaseAmount	654	ARF3	32668949992573228	1	"{""biopax"": 1}"	confounder	False	True
+3488	ETS1	DecreaseAmount	654	ARF3	-16909221580737534	1	"{""biopax"": 1}"	confounder	False	True
+3321	ELK1	DecreaseAmount	654	ARF3	22173597812335470	1	"{""biopax"": 1}"	confounder	False	True
+11642	ZEB1	IncreaseAmount	15943	PARD6A	-5261724278995445	1	"{""reach"": 1}"	confounder	False	True
+11642	ZEB1	DecreaseAmount	15943	PARD6A	-30529664105594700	2	"{""reach"": 1, ""biopax"": 1}"	confounder	False	True
+1033	BDNF	IncreaseAmount	15943	PARD6A	-15464038415004177	6	"{""medscan"": 1, ""reach"": 5}"	confounder	False	True
+1033	BDNF	DecreaseAmount	15943	PARD6A	-25948282643734048	1	"{""reach"": 1}"	confounder	False	True
+3471	ESRRA	DecreaseAmount	654	ARF3	-5601785896419857	1	"{""biopax"": 1}"	confounder	False	True
+11642	ZEB1	DecreaseAmount	9253	PPIA	-26609966334411955	1	"{""biopax"": 1}"	confounder	False	True
+1033	BDNF	IncreaseAmount	9253	PPIA	23028167437018109	1	"{""reach"": 1}"	confounder	False	True
+4074	GABPB1	DecreaseAmount	3017	DR1	10874745182187455	1	"{""biopax"": 1}"	confounder	False	True
+3488	ETS1	DecreaseAmount	3017	DR1	9065592461620481	1	"{""biopax"": 1}"	confounder	False	True
+3471	ESRRA	DecreaseAmount	15943	PARD6A	-15795800645398464	1	"{""biopax"": 1}"	confounder	False	True
+3321	ELK1	DecreaseAmount	3017	DR1	-16336157496399562	1	"{""biopax"": 1}"	confounder	False	True
+4074	GABPB1	DecreaseAmount	654	ARF3	32668949992573228	1	"{""biopax"": 1}"	confounder	False	True
+3488	ETS1	DecreaseAmount	654	ARF3	-16909221580737534	1	"{""biopax"": 1}"	confounder	False	True
+3321	ELK1	DecreaseAmount	654	ARF3	22173597812335470	1	"{""biopax"": 1}"	confounder	False	True
+11642	ZEB1	IncreaseAmount	15943	PARD6A	-5261724278995445	1	"{""reach"": 1}"	confounder	False	True
+11642	ZEB1	DecreaseAmount	15943	PARD6A	-30529664105594700	2	"{""reach"": 1, ""biopax"": 1}"	confounder	False	True
+1033	BDNF	IncreaseAmount	15943	PARD6A	-15464038415004177	6	"{""medscan"": 1, ""reach"": 5}"	confounder	False	True
+1033	BDNF	DecreaseAmount	15943	PARD6A	-25948282643734048	1	"{""reach"": 1}"	confounder	False	True
+3471	ESRRA	DecreaseAmount	654	ARF3	-5601785896419857	1	"{""biopax"": 1}"	confounder	False	True
+11642	ZEB1	DecreaseAmount	9253	PPIA	-26609966334411955	1	"{""biopax"": 1}"	confounder	False	True
+1033	BDNF	IncreaseAmount	9253	PPIA	23028167437018109	1	"{""reach"": 1}"	confounder	False	True
+4074	GABPB1	DecreaseAmount	3017	DR1	10874745182187455	1	"{""biopax"": 1}"	confounder	False	True
+3488	ETS1	DecreaseAmount	3017	DR1	9065592461620481	1	"{""biopax"": 1}"	confounder	False	True
+3471	ESRRA	DecreaseAmount	15943	PARD6A	-15795800645398464	1	"{""biopax"": 1}"	confounder	False	True
+3321	ELK1	DecreaseAmount	3017	DR1	-16336157496399562	1	"{""biopax"": 1}"	confounder	False	True
+9253	PPIA	DecreaseAmount	11005	SLC2A1	3950574519287542	1	"{""reach"": 1}"	mediator	True	False
+25070	ACD	DecreaseAmount	11005	SLC2A1	23604622786817062	1	"{""reach"": 1}"	mediator	True	False
+9253	PPIA	IncreaseAmount	11850	TLR4	-35580431908135061	1	"{""reach"": 1}"	mediator	True	False
+9846	RAN	DecreaseAmount	4910	HIF1A	15161419721830169	1	"{""reach"": 1}"	mediator	True	False
+9846	RAN	IncreaseAmount	3236	EGFR	8835529533412334	4	"{""reach"": 4}"	mediator	True	False
+28352	CUEDC2	DecreaseAmount	19383	SOCS1	30883249871309731	1	"{""reach"": 1}"	mediator	True	False
+28352	CUEDC2	IncreaseAmount	19383	SOCS1	15738547779064995	1	"{""reach"": 1}"	mediator	True	False
+28352	CUEDC2	IncreaseAmount	19383	SOCS1	11539320172681123	2	"{""reach"": 2}"	mediator	True	False
+9846	RAN	IncreaseAmount	6204	JUN	25305705368175210	1	"{""reach"": 1}"	mediator	True	False
+27797	SNHG15	IncreaseAmount	1736	CDC42	-8412093239404491	2	"{""medscan"": 2}"	mediator	True	False
+9253	PPIA	IncreaseAmount	11364	STAT3	21898775251082775	1	"{""reach"": 1}"	mediator	True	False
+9253	PPIA	IncreaseAmount	1069	BMP2	-23529614688826369	1	"{""reach"": 1}"	mediator	True	False

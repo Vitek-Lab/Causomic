@@ -5,7 +5,7 @@ import os
 
 import pandas as pd
 import numpy as np
-from MScausality.graph import GraphBuilder
+from MScausality.graph_construction.graph import GraphBuilder
 import pickle
 
 import numpyro
@@ -14,14 +14,19 @@ from numpyro.infer import MCMC, NUTS
 from numpyro.distributions import constraints
 from numpyro import handlers
 
-numpyro.set_platform('cpu')
-numpyro.set_host_device_count(4)
 from operator import attrgetter
 from y0.dsl import Variable
+
+import networkx as nx
+import y0
+from y0.algorithm.simplify_latent import simplify_latent_dag
 
 import jax
 from jax import numpy as jnp
 from jax import random
+
+numpyro.set_platform('cpu')
+numpyro.set_host_device_count(4)
 
 def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
 
@@ -58,15 +63,20 @@ def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
 
         # Create a Normal distribution object
         if "latent" in node_name:
-            root_sample = numpyro.sample(f"{node_name}", dist.Normal(root_coef_dict_mean[node_name],
-                                                                  root_coef_dict_scale[node_name]
-                                                                     ).expand([data[list(data.keys())[0]].shape[0]]))
+            root_sample = numpyro.sample(f"{node_name}",
+                         dist.Normal(root_coef_dict_mean[node_name],
+                                     root_coef_dict_scale[node_name]
+                                     ).expand(
+                             [data[list(data.keys())[0]].shape[0]])
+            )
         else:
 
             imp = numpyro.sample(
                 f"imp_{node_name}", dist.Normal(
-                    root_coef_dict_mean[node_name] - (2*root_coef_dict_scale[node_name]),
-                    root_coef_dict_scale[node_name]).expand([sum(missing[node_name] == 1)]).mask(False)
+                    root_coef_dict_mean[node_name],
+                    root_coef_dict_scale[node_name]).expand(
+                    [sum(missing[node_name] == 1)]
+                ).mask(False)
             )
 
             observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
@@ -94,12 +104,11 @@ def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
 
         imp = numpyro.sample(
             f"imp_{node_name}", dist.Normal(
-                mean[missing[node_name] == 1] - (2*scale),
+                mean[missing[node_name] == 1],
                 scale).mask(False)
         )
 
         observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
-        # data[node_name][missing[node_name]] = imp[missing[node_name]].to(torch.double)
 
         # Create a Normal distribution object
         downstream_sample = numpyro.sample(f"{node_name}",
@@ -149,7 +158,6 @@ def int_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
     downstream_distributions = dict()
     for node_name in root_nodes:
 
-
         root_sample = numpyro.sample(f"{node_name}",
                                   dist.Normal(root_coef_dict_mean[node_name],
                                               root_coef_dict_scale[node_name]))
@@ -178,6 +186,24 @@ def int_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
     return downstream_distributions
 
 class SCM: ## TODO: rename to LVM? LVSCM?
+    """
+    Class for building and fitting a latent variable structural causal model.
+
+    Parameters:
+    - observational_data (pd.DataFrame): Dataframe of observational data. Must in long 
+    format with proteins as columns as observations as rows.
+    - causal_graph (networkx.DiGraph): Causal graph of the data.
+
+    Attributes:
+    - obs_data (pd.DataFrame): Dataframe of observational data.
+    - causal_graph (networkx.DiGraph): Causal graph of the data.
+
+    Methods:
+    - prepare_scm_input: Prepares the input for the SCM model.
+    - fit_scm: Fits the SCM model.
+    - intervention: Performs an intervention on the SCM model.
+    """
+
     def __init__(self, observational_data, causal_graph):
         self.obs_data = observational_data
         self.causal_graph = causal_graph
@@ -340,41 +366,65 @@ def summary(samples):
         site_stats[site_name] = describe[["mean", "std", "5%", "25%", "50%", "75%", "95%"]]
     return site_stats
 
+def build_igf_network(cell_confounder):
+    """
+    Create IGF graph in networkx
+    
+    cell_confounder : bool
+        Whether to add in cell type as a confounder
+    """
+    graph = nx.DiGraph()
+
+    ## Add edges
+    graph.add_edge("A", "B")
+    graph.add_edge("B", "C")
+    graph.add_edge("E", "B")
+    graph.add_edge("E", "A")
+    
+    return graph
+
+def build_admg(graph, cell_confounder=False, cell_latent=False):
+    ## Define obs vs latent nodes
+    all_nodes = ["A", "B", "C", "E"]
+    obs_nodes = ["A", "B", "C"]
+    latent_nodes = ["E"]
+        
+    attrs = {node: (True if node not in obs_nodes and 
+                    node != "\\n" else False) for node in all_nodes}
+
+    nx.set_node_attributes(graph, attrs, name="hidden")
+    
+    ## Use y0 to build ADMG
+    y0_graph = y0.graph.NxMixedGraph()
+    y0_graph = y0_graph.from_latent_variable_dag(graph, "hidden")
+    
+    return y0_graph
+
+
 def main():
 
-    # experimental_data = pd.read_csv("/mnt/d/OneDrive-NortheasternUniversity/Northeastern/Research/MS_data/Single_cell/Leduc/MSstats/MSstats_summarized.csv")
-    # indra_statements = pd.read_csv("../../data/sox_pathway.csv")
+    # # Data
+    # data = pd.read_csv("data/Talus/processed_data/ProteinLevelData.csv")
 
-    # graph = GraphBuilder(indra_statements, experimental_data)
-    # graph.build(data_type="TMT",
-    #             protein_format="UniProtKB_AC/ID",
-    #             evidence_filter=1,
+    # # Build graph
+    # graph = pd.read_csv("data/INDRA_networks/Talus_networks/GCM_TPR_obs.tsv", sep="\t")
+    # graph = GraphBuilder(graph, data)
+    # graph.build(data_type="LF",
+    #             protein_format="Gene_Name_Organism",
+    #             evidence_filter=2,
     #             source_name="source_hgnc_symbol",
     #             target_name="target_hgnc_symbol")
     # graph.create_latent_graph()
-    # graph.find_all_identifiable_pairs()
 
-    pickle_filename = '../../data/IGF_pathway/igf_graph.pkl'
+    data = pd.read_csv("data/sim_data/four_node_protein_data.csv")
 
+    graph = build_igf_network(cell_confounder=False)
+    y0_graph = build_admg(graph, cell_confounder=False)
 
-
-    # Save the object to a pickle file
-    # with open(pickle_filename, 'wb') as pickle_file:
-    #     pickle.dump(graph, pickle_file)
-
-    # Load the object from the pickle file
-    with open(pickle_filename, 'rb') as pickle_file:
-        graph = pickle.load(pickle_file)
-
-    data = pd.read_csv("../../data/IGF_pathway/protein_data.csv")
-
-    # graph = example[0]
-    # data = example[1]
-
-    scm = SCM(data, graph)
+    scm = SCM(data.iloc[:, 1:-1], y0_graph)
     scm.prepare_scm_input()
     scm.fit_scm()
-    scm.intervention("Ras", "Erk", 10.)
+    scm.intervention("MEN1", "TPR", 10.)
 
     print(scm.learned_params)
 
