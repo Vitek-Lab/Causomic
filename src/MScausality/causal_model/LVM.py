@@ -31,7 +31,7 @@ from chirho.interventional.handlers import do
 from chirho.observational.handlers import condition
 
 # pyro.clear_param_store()
-# pyro.set_rng_seed(1234)
+pyro.set_rng_seed(1234)
 # pyro.settings.set(module_local_params=True)
 
 class ProteomicPerturbationModel(PyroModule):
