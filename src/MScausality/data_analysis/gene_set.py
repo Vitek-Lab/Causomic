@@ -86,7 +86,9 @@ def test_gene_sets(correlation_data,
                    gene_set_file_path, 
                    threshold=0.5,
                    differential_analysis=None,
-                   comparison=None):
+                   comparison=None,
+                   fc_pval=None,
+                   cutoff=None):
     """
     Checks correlations between genes in gene sets.
 
@@ -96,6 +98,9 @@ def test_gene_sets(correlation_data,
     - gene_set_file_path (str): File path to gene set JSON file.
     - threshold (float): Correlation threshold to count as significant correlation. Default is 0.5.
     - differential_analysis (pd.DataFrame): Differential analysis results to use for filtering.
+    - comparison (str): Comparison to use for filtering differential analysis results.
+    - fc_pval (float): Use fold change (fc) or p-value (pval) cutoff for differential analysis. Default is None.
+    - cutoff (float): Cutoff value for fold change or p-value. Default is None.
 
     Returns:
     - pd.DataFrame: Results containing pathway information and correlation statistics.
@@ -148,8 +153,16 @@ def test_gene_sets(correlation_data,
                 subset = differential_analysis.loc[
                     (differential_analysis["Protein"].isin(measured_genes_in_path)) & \
                         (differential_analysis["Label"] == comparison), :]
-                percent_differential = len(subset.loc[subset["adj.pvalue"] < .05]
+                
+                if fc_pval == "fc":
+                    col_name = "log2FC"
+                    percent_differential = len(subset.loc[abs(subset[col_name]) > cutoff]
                                            ) / len(measured_genes_in_path)
+                elif fc_pval == "pval":
+                    col_name = "adj.pvalue"
+                    percent_differential = len(subset.loc[subset[col_name] < cutoff]
+                                           ) / len(measured_genes_in_path)
+
             else:
                 percent_differential = np.nan
 

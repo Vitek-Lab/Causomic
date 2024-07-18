@@ -5,10 +5,6 @@ import os
 
 import pandas as pd
 import numpy as np
-from MScausality.graph_construction.graph import GraphBuilder
-import MScausality.data_analysis.normalization as norm
-
-import pickle
 
 import pyro
 import pyro.distributions as dist
@@ -25,13 +21,10 @@ import networkx as nx
 import y0
 from y0.algorithm.simplify_latent import simplify_latent_dag
 
-from chirho.counterfactual.handlers import MultiWorldCounterfactual
-from chirho.indexed.ops import IndexSet, gather
 from chirho.interventional.handlers import do
-from chirho.observational.handlers import condition
 
+# TODO: give user the option to reset parameters or not (new models vs more training)
 # pyro.clear_param_store()
-pyro.set_rng_seed(1234)
 # pyro.settings.set(module_local_params=True)
 
 class ProteomicPerturbationModel(PyroModule):
@@ -43,7 +36,7 @@ class ProteomicPerturbationModel(PyroModule):
         self.root_nodes = root_nodes
         self.downstream_nodes = downstream_nodes
 
-    def forward(self):
+    def forward(self, data):
 
         # root_coef_dict_mean = dict()
         # root_coef_dict_scale = dict()
@@ -58,15 +51,15 @@ class ProteomicPerturbationModel(PyroModule):
 
         for node_name, items in self.downstream_nodes.items():
 
-            downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(f"{node_name}_intercept",
-                                                                                dist.Normal(0., 1.))
+            downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(
+                f"{node_name}_intercept", dist.Normal(0., 1.))
             for item in items:
 
-                downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
-                                                                                    dist.Normal(0., 1.))
+                downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(
+                    f"{node_name}_{item}_coef", dist.Normal(0., 1.))
 
-            downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(f"{node_name}_scale",
-                                                                            dist.Exponential(2.))
+            downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
+                f"{node_name}_scale", dist.Exponential(2.))
 
         # Dictionary to store the Pyro root distribution objects
         downstream_distributions = dict()
@@ -81,17 +74,36 @@ class ProteomicPerturbationModel(PyroModule):
                         # root_coef_dict_mean[node_name], root_coef_dict_scale[node_name]))
                 else:
 
-                    missing = pyro.sample(f"missing_{node_name}", dist.Bernoulli(0.25))
+                    missing = pyro.sample(f"missing_{node_name}", dist.Bernoulli(0.25),
+                                      obs=data[f"missing_{node_name}"])
 
                     # Impute missing values where needed
-                    with poutine.mask(mask=~missing.bool()):
-                        obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(0, 1))
+                    # with poutine.mask(mask=~missing.bool()):
+                    #     obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(0, 1))
                     with poutine.mask(mask=missing.bool()):
                         missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(0, 1))  # no obs
-                    root_sample = pyro.deterministic(
-                        f"{node_name}",
-                        torch.where(~missing.bool(), obs_values, missing_values),
-                    )
+                    
+                    if f"obs_{node_name}" in data:
+                        observed = data[f"obs_{node_name}"].detach_()
+                        observed[missing.bool()] = missing_values[missing.bool()]
+                        
+                        # obs_values[missing.bool()] = missing_values[missing.bool()]
+
+                        # root_sample = pyro.deterministic(
+                        #     f"{node_name}",
+                        #     torch.where(~missing.bool(), obs_values, missing_values),
+                        #     obs=data[f"obs_{node_name}"]
+                        # )
+                        root_sample = pyro.sample(
+                            f"{node_name}",
+                            dist.Normal(0, 1),
+                            obs=observed
+                        )
+                    else:
+                        root_sample = pyro.sample(
+                            f"{node_name}",
+                            dist.Normal(0, 1)
+                        )
 
                 # Store the distribution in the dictionary
                 downstream_distributions[node_name] = root_sample
@@ -109,18 +121,35 @@ class ProteomicPerturbationModel(PyroModule):
                 scale = downstream_coef_dict_scale[f"{node_name}_scale"]
                 
                 # Mask this a boolean
-                missing = pyro.sample(f"missing_{node_name}", dist.Bernoulli(0.25))
+                missing = pyro.sample(f"missing_{node_name}", dist.Bernoulli(0.25),
+                                      obs=data[f"missing_{node_name}"])
 
                 # Impute missing values where needed
-                with poutine.mask(mask=~missing.bool()):
-                    obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(mean, scale))
+                # with poutine.mask(mask=~missing.bool()):
+                #     obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(mean, scale))
                 with poutine.mask(mask=missing.bool()):
-                    missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(mean, scale))  # no obs
+                    missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(mean-scale, scale))  # no obs
 
-                downstream_sample = pyro.deterministic(
-                    f"{node_name}",
-                    torch.where(~missing.bool(), obs_values, missing_values),
-                )
+                if f"obs_{node_name}" in data:
+                    observed = data[f"obs_{node_name}"].detach_()
+                    observed[missing.bool()] = missing_values[missing.bool()]
+
+
+                    # downstream_sample = pyro.deterministic(
+                    #     f"{node_name}",
+                    #     torch.where(~missing.bool(), obs_values, missing_values),
+                    #     obs=data[f"obs_{node_name}"]
+                    # )
+                    downstream_sample = pyro.sample(
+                        f"{node_name}",
+                        dist.Normal(mean, scale),
+                        obs=observed
+                    )
+                else:
+                    downstream_sample = pyro.sample(
+                        f"{node_name}",
+                        dist.Normal(mean, scale)
+                    )
 
                 # Store the distribution in the dictionary
                 downstream_distributions[node_name] = downstream_sample
@@ -132,21 +161,21 @@ class ConditionedProteomicModel(PyroModule):
         super().__init__()
         self.model = model
 
-    def forward(self, condition_data, **kwargs):
-        with condition(data=condition_data):
-            return self.model(**kwargs)
+    def forward(self, condition_data):#**kwargs
+        # with condition(data=condition_data):
+        return self.model(data=condition_data)
 
 class ProteomicPerturbationCATE(pyro.nn.PyroModule):
     def __init__(self, model: ProteomicPerturbationModel):
         super().__init__()
         self.model = model
 
-    def forward(self, intervention, intervention_node, condition_data):#, obs_data, missing, root_nodes, downstream_nodes
+    def forward(self, intervention, condition_data):#, obs_data, missing, root_nodes, downstream_nodes, intervention, intervention_node
 
-        with do(actions={intervention_node: (torch.tensor(intervention).float())}), \
-            condition(data=condition_data):#, MultiWorldCounterfactual(), 
-
-            return self.model()
+        # with do(actions={intervention_node: (torch.tensor(intervention).float())}):#, \
+            # condition(data=condition_data):#, MultiWorldCounterfactual(), 
+        with do(actions=intervention):#, \
+            return self.model(data=condition_data)
         
 class LVM: ## TODO: rename to LVM? LVSCM?
     def __init__(self, observational_data, causal_graph):
@@ -307,7 +336,9 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         
 
     def fit_model(self, num_steps=2000, 
-                  initial_lr=.03, gamma=.01):
+                  initial_lr=.03, gamma=.01,
+                  patience=50, min_delta=5):
+        pyro.set_rng_seed(1234)
 
         model = ConditionedProteomicModel(
             ProteomicPerturbationModel(n_obs = len(self.input_data), 
@@ -326,11 +357,25 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         svi = SVI(model, guide, optim, loss=Trace_ELBO())
 
         # do gradient steps
-        print("starting training")
+        best_loss = float('inf')
+        steps_since_improvement = 0
+
         for step in range(num_steps):
             loss = svi.step(condition_data)
             if step % 100 == 0:
-                print(loss)
+                print(f"Step {step}: Loss = {loss}")
+
+            # Check for improvement
+            if loss < best_loss - min_delta:
+                best_loss = loss
+                steps_since_improvement = 0
+            else:
+                steps_since_improvement += 1
+
+            # Early stopping condition
+            if steps_since_improvement >= patience:
+                print(f"Stopping early at step {step} with loss {loss}")
+                break
 
         self.model = model
         self.guide = guide
@@ -338,7 +383,7 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         self.compile_parameters()
         self.add_imputed()
 
-    def intervention(self, intervention_node, outcome_node, intervention_value, compare_value=0.):
+    def intervention(self, intervention, outcome_node, compare_value=0.):
         
         # Prep interventional conditioning data
         condition_data_test = dict()
@@ -346,10 +391,14 @@ class LVM: ## TODO: rename to LVM? LVSCM?
             if "latent" not in node:
                 condition_data_test[f"missing_{node}"] = torch.tensor(
                     [0 for _ in range(len(self.input_data))])
+                # condition_data_test[f"obs_{node}"] = torch.tensor(
+                #     [0. for _ in range(len(self.input_data))])
 
         for node in self.descendent_nodes:
             condition_data_test[f"missing_{node}"] = torch.tensor(
                 [0 for _ in range(len(self.input_data))])
+            # condition_data_test[f"obs_{node}"] = torch.tensor(
+            #     [0. for _ in range(len(self.input_data))])
 
         # Posterior samples
         ate_model = ProteomicPerturbationCATE(
@@ -360,11 +409,14 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         
         ate_predictive = pyro.infer.Predictive(
             ate_model, guide=self.guide, num_samples=50)
-        zero_int = ate_predictive(compare_value, 
-                                  intervention_node, 
+        zero_int = dict()
+        for key, value in intervention.items():
+            zero_int[key] = torch.tensor(compare_value).float()
+            intervention[key] = torch.tensor(value).float()
+
+        zero_int = ate_predictive(zero_int, 
                                   condition_data_test)
-        intervention = ate_predictive(intervention_value, 
-                                      intervention_node, 
+        intervention = ate_predictive(intervention, 
                                       condition_data_test)
 
         self.posterior_samples = zero_int[outcome_node].flatten()
@@ -428,8 +480,8 @@ def main():
     lvm.prepare_graph()
     lvm.prepare_data()
 
-    lvm.fit_model()
-    lvm.intervention("Ras", "Erk", 3.)
+    lvm.fit_model(num_steps=100)
+    lvm.intervention({"Erk": (torch.tensor(3.))}, "Erk")
 
     plot_data = lvm.imputed_data[lvm.imputed_data["protein"].isin(["Raf", "Mek"])]
     # pivot wide

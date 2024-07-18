@@ -18,7 +18,7 @@ from indra.databases.mesh_client import get_mesh_name
 from protmapper import uniprot_client
 
 from indra_cogex.client import Neo4jClient, autoclient
-from indra_cogex.client.subnetwork import indra_shared_upstream_subnetwork, indra_shared_downstream_subnetwork, indra_mediated_subnetwork, indra_subnetwork_relations
+from indra_cogex.client.subnetwork import indra_shared_upstream_subnetwork, indra_mediated_subnetwork, indra_subnetwork_relations
 from indra_cogex.representation import get_nodes_str
 from indra_cogex.client.utils import minimum_evidence_helper
 from dotenv import load_dotenv 
@@ -185,6 +185,7 @@ def analysis_uniprot(
 
     df = pd.DataFrame(rows, columns=columns)
     df.drop_duplicates(subset=["stmt_hash"], inplace=True)
+    df = df.loc[df["evidence_count"] > minimum_evidence_count]
 
     df = df[(-pd.isna(df["source_hgnc_symbol"])) & (-pd.isna(df["target_hgnc_symbol"]))]
     df = df[df["relation"].isin(["IncreaseAmount", "DecreaseAmount"])]
@@ -223,6 +224,7 @@ def analysis_uniprot(
     print(end - start)
     temp_df = pd.DataFrame(rows, columns=columns)
     temp_df.drop_duplicates(subset=["stmt_hash"], inplace=True)
+    temp_df = temp_df.loc[temp_df["evidence_count"] > minimum_evidence_count]
 
     neighbors = indra_mediated_subnetwork(
         nodes=hgnc_curies,
@@ -252,11 +254,15 @@ def analysis_uniprot(
 
     temp_df2 = pd.DataFrame(rows, columns=columns)
     temp_df2.drop_duplicates(subset=["stmt_hash"], inplace=True)
+    temp_df2 = temp_df.loc[temp_df["evidence_count"] > minimum_evidence_count]
+
     df = pd.concat([df, temp_df, temp_df2])
 
     # Add in if source and target were observed or latent
     df["source_observed"] = df["source_hgnc_id"].isin(hgnc_ids)
     df["target_observed"] = df["target_hgnc_id"].isin(hgnc_ids)
+
+    df = df.reset_index(drop=True)
 
     return df
 
@@ -384,10 +390,11 @@ def main():
                                os.getenv("PASSWORD"))
                         )
     
-    ids = ['NACA', 'BRD2', 'BAZ2A', 'DDX49', 'PCBP2', 'EIF3F', 'SRP14', 'CHD4',
-           'SNX3', 'HDAC1', 'RO60', 'SRSF9', 'ARPC3', 'NONO', 'HDGF', 'BTF3',
-           'EIF3H', 'EIF3E', 'RNPS1', 'RHOA', 'SRRM1', 'RACK1', 'ERP29', 
-           'EIF3D', 'SRSF2', 'SUMO2', 'SF3A1', 'WDR1', 'CBX3']
+    # ids = ['NACA', 'BRD2', 'BAZ2A', 'DDX49', 'PCBP2', 'EIF3F', 'SRP14', 'CHD4',
+    #        'SNX3', 'HDAC1', 'RO60', 'SRSF9', 'ARPC3', 'NONO', 'HDGF', 'BTF3',
+    #        'EIF3H', 'EIF3E', 'RNPS1', 'RHOA', 'SRRM1', 'RACK1', 'ERP29', 
+    #        'EIF3D', 'SRSF2', 'SUMO2', 'SF3A1', 'WDR1', 'CBX3']
+    ids=["MYC"]
     # ids = ['PARD6A', 'ARF3', 'DR1', 'RAN']
 
     data = analysis_uniprot(

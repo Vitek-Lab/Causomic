@@ -319,7 +319,7 @@ def add_weights(graph, experimental_data, indra_stmts):
 
 def main():
 
-    morf_ccni_obs_network = pd.read_csv("data/INDRA_networks/Talus_networks/GCM_TPR_obs.tsv", sep="\t")
+    morf_ccni_obs_network = pd.read_csv("data/INDRA_networks/Talus_networks/CCCNNNNNNAAGWT_UNKNOWN.tsv", sep="\t")
     msstats_data = pd.read_csv("data/Talus/processed_data/ProteinLevelData.csv")
 
     morf_ccni_obs_dag = GraphBuilder(morf_ccni_obs_network, msstats_data, True)
