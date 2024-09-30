@@ -165,10 +165,10 @@ def benchmark_comparison(full_graph, y0_graph, coef):
         eliate_var = list()
         mscausality_var = list()
 
-        for i in range(temp_r):
+        for i in range(100):
 
             sr_data = simulate_data(full_graph, coefficients=coef, 
-                                    add_feature_var=True, n=30, seed=i)
+                                    add_feature_var=True, n=temp_r, seed=i)
 
             sr_data = dataProcess(sr_data["Feature_data"], normalization=False, sim_data=True)
             
