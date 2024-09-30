@@ -14,6 +14,8 @@ def simulate_data(graph,
                   mnar_missing_param=[-3, .4],
                   add_error=False,
                   error_node=None,
+                  intervention=dict(),
+                  add_feature_var=True,
                   n=1000,
                   seed=None):
     """Simulate data from a given graph.
@@ -39,6 +41,8 @@ def simulate_data(graph,
         Whether to add extra measurement error to a node in the simulation.
     error_node : str
         The node to add extra measurement error to.
+    intervention : dict
+        A dictionary of interventions to apply to the data. Default is None.
     n : int
         The number of samples to simulate.
     seed : int
@@ -62,7 +66,12 @@ def simulate_data(graph,
     print("simulating data...")
     for node in sorted_nodes:
         node_coefficients = coefficients[node]
-        data[node] = simulate_node(data, node_coefficients, n, cell_type)
+        if node in intervention.keys():
+            temp_int = intervention[node]
+        else:
+            temp_int = None
+        data[node] = simulate_node(data, node_coefficients, n, cell_type,
+                                   temp_int)
 
     if cell_type:
         data["cell_type"] = np.repeat([i for i in range(n_cells)], n//n_cells)
@@ -73,18 +82,27 @@ def simulate_data(graph,
         data[error_node] += np.random.normal(0, 5, n)
 
     # break data into features
-    print("adding feature level data...")
-    feature_level_data_list = list()
-    for node in sorted_nodes:
-        feature_level_data_list.append(generate_features(data[node], node))
+    if add_feature_var:
+        print("adding feature level data...")
+        feature_level_data_list = list()
+        for node in sorted_nodes:
+            feature_level_data_list.append(generate_features(data[node], node))
 
-    feature_level_data = pd.concat(feature_level_data_list, ignore_index=True)
+        feature_level_data = pd.concat(feature_level_data_list, 
+                                       ignore_index=True)
 
-    print("masking data...")
-    if include_missing:
-        feature_level_data = add_missing(feature_level_data, mar_missing_param, mnar_missing_param)
+        print("masking data...")
+        if include_missing:
+            feature_level_data = add_missing(
+                feature_level_data, 
+                mar_missing_param, 
+                mnar_missing_param)
+    else:
+        feature_level_data = None
 
-    return {"Protein_data" : data, "Feature_data" : feature_level_data, "Coefficients" : coefficients}
+    return {"Protein_data" : data, 
+            "Feature_data" : feature_level_data, 
+            "Coefficients" : coefficients}
 
 def generate_coefficients(graph):
     """Generate random coefficients for a graph.
@@ -136,7 +154,7 @@ def generate_node_coefficients(parents):
 
     return coefficients
 
-def simulate_node(data, coefficients, n, cell_type):
+def simulate_node(data, coefficients, n, cell_type, intervention):
     """Simulate a node.
 
     Parameters
@@ -149,6 +167,8 @@ def simulate_node(data, coefficients, n, cell_type):
         The number of samples to simulate.
     cell_type : bool
         Whether cell type is included in the simulation.
+    intervention : dict
+        A dictionary of interventions to apply to the data.
     Returns
     -------
     node_data : numpy.ndarray
@@ -174,6 +194,9 @@ def simulate_node(data, coefficients, n, cell_type):
 
     node_data += np.random.normal(0, coefficients["error"], n)
 
+    if intervention is not None:
+        node_data = np.repeat(intervention, n)
+
     return node_data
 
 def generate_features(data, node):
@@ -192,18 +215,21 @@ def generate_features(data, node):
     feature_level_data : list
         The data at the feature level.
     """
-    feature_level_data = pd.DataFrame(columns=["Protein", "Replicate", "Feature", "Intensity"])
+    feature_level_data = pd.DataFrame(columns=["Protein", "Replicate", 
+                                               "Feature", "Intensity"])
 
     number_features = np.random.randint(3, 20)
     feature_effects = [np.random.uniform(-2, 2) for _ in range(number_features)]
 
     for i in range(len(data)):
         for j in range(number_features):
-            feature_level_data = pd.concat([feature_level_data, pd.DataFrame({"Protein": [node],
-                                                            "Replicate": [i],
-                                                            "Feature": [j],
-                                                            "Intensity": [data[i] + feature_effects[j]]})],
-                                                           ignore_index=True)
+            feature_level_data = pd.concat([feature_level_data, 
+                                            pd.DataFrame(
+                                                {"Protein": [node],
+                                                 "Replicate": [i],
+                                                 "Feature": [j],
+                                                 "Intensity": [data[i] + feature_effects[j]]})],
+                                                 ignore_index=True)
 
     return feature_level_data
 

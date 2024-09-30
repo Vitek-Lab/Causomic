@@ -151,7 +151,13 @@ class GraphBuilder:
         """
         self.identify_latent_nodes()
 
-        simplified_graph = simplify_latent_dag(copy.deepcopy(self.graph), "hidden")
+
+        mapping = dict(zip(list(self.graph.nodes), 
+                      [Variable(i) for i in list(self.graph.nodes)]))
+        self.graph = nx.relabel_nodes(self.graph, mapping)
+
+        simplified_graph = simplify_latent_dag(graph=copy.deepcopy(self.graph), 
+                                               tag="hidden")
         self.simplified_graph = simplified_graph
         y0_graph = NxMixedGraph()
         y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")

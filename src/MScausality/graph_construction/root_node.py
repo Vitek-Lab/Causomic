@@ -1,14 +1,6 @@
-from indra.databases.hgnc_client import get_uniprot_id, get_hgnc_id, get_hgnc_name
-from indra_cogex.client.subnetwork import _paths_to_stmts, indra_shared_upstream_subnetwork
+from indra.databases.hgnc_client import get_hgnc_name
+from indra_cogex.client.subnetwork import indra_shared_upstream_subnetwork
 from indra_cogex.client import Neo4jClient
-from indra_cogex.representation import norm_id
-
-from textwrap import dedent
-from typing import Iterable, List, Tuple
-from indra.statements import Statement
-
-
-from protmapper import uniprot_client
 
 import pandas as pd
 import numpy as np
@@ -17,136 +9,12 @@ import json
 
 import matplotlib.pyplot as plt
 
+from MScausality.graph_construction.utils import get_id, query_confounder_relationships, get_two_step_root
+
 import os
 import time
 from dotenv import load_dotenv 
 load_dotenv() 
-
-
-def get_two_step_root(
-    *,
-    root_nodes: Iterable[Tuple[str, str]],
-    downstream_nodes: Iterable[Tuple[str, str]],
-    client: Neo4jClient
-) -> List[Statement]:
-    """Return the INDRA Statement subnetwork induced by paths of length
-    two between nodes A and B in a query with intermediate nodes X such
-    that paths look like A-X-B.
-
-    Parameters
-    ----------
-    nodes :
-        The nodes to query (A and B are one of these nodes in
-        the following examples).
-    client :
-        The Neo4j client.
-    first_forward:
-        If true, query A->X otherwise query A<-X
-    second_forward:
-        If true, query X->B otherwise query X<-B
-
-    Returns
-    -------
-    :
-        The INDRA statement subnetwork induced by the query
-    """
-    
-    root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
-    downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
-
-    query = dedent(
-        f"""\
-        MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
-        WHERE
-            n1.id IN [{root_nodes_str}]
-            AND n2.id IN [{downstream_nodes_str}]
-            AND n1.id <> n2.id
-            AND n3.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-        RETURN p
-        """
-    )
-
-
-    print(query)
-    return _paths_to_stmts(client=client, query=query)
-    # return client.query_relations(query)
-
-def get_one_step_root_up(
-    *,
-    root_nodes: Iterable[Tuple[str, str]],
-    client: Neo4jClient
-    ) -> List[Statement]:
-    """Return the INDRA Statement subnetwork induced by paths of length
-    two between nodes A and B in a query with intermediate nodes X such
-    that paths look like A-X-B.
-
-    Parameters
-    ----------
-    nodes :
-        The nodes to query (A and B are one of these nodes in
-        the following examples).
-    client :
-        The Neo4j client.
-    first_forward:
-        If true, query A->X otherwise query A<-X
-    second_forward:
-        If true, query X->B otherwise query X<-B
-
-    Returns
-    -------
-    :
-        The INDRA statement subnetwork induced by the query
-    """
-    
-    root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
-
-    query = dedent(
-        f"""\
-        MATCH p=(n2:BioEntity)-[r1:indra_rel]->(n1:BioEntity)
-        WHERE
-            n1.id IN [{root_nodes_str}]
-            AND n1.id <> n2.id
-            AND n2.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-        RETURN p
-        """
-    )
-
-
-    print(query)
-    return _paths_to_stmts(client=client, query=query)
-    # return client.query_relations(query)
-
-def get_id(ids, id_type):
-    if id_type == "uniprot":
-        uniprot_ids = set(ids)
-
-        hgnc_ids = set()
-        failed = set()
-        for uniprot_id in uniprot_ids:
-            hgnc_id = uniprot_client.get_hgnc_id(uniprot_id)
-            if hgnc_id:
-                hgnc_ids.add(hgnc_id)
-            else:
-                failed.add(uniprot_id)
-
-    elif id_type == "gene":
-        hgnc_ids = set()
-        failed = set()
-        for gene_id in ids:
-            hgnc_id = get_hgnc_id(gene_id)
-            get_uniprot_id(gene_id)
-            if hgnc_id:
-                hgnc_ids.add(hgnc_id)
-            else:
-                failed.add(gene_id)
-    
-    hgnc_curies = [("hgnc", gene_id) for gene_id in hgnc_ids if gene_id is not None]
-
-    return hgnc_curies
-
 
 def get_root_neighbors(root_ids, downstream_ids, id_type, client, evidence_count=5):
 
@@ -174,7 +42,6 @@ def get_root_neighbors(root_ids, downstream_ids, id_type, client, evidence_count
     rows = []
     skipped = 0
     for relation in neighbors:
-        print(skipped)
         rows.append(
             (
                 relation.source_id,
@@ -228,25 +95,23 @@ def get_root_neighbors(root_ids, downstream_ids, id_type, client, evidence_count
 
     ids = np.unique(np.concatenate([root_hgnc_id, 
                                     downstream_hgnc_id]))
-    ids = np.unique(np.concatenate([df.loc[:, "source_hgnc_id"].values, 
-                                    df.loc[:, "target_hgnc_id"].values]))
+    # ids = np.unique(np.concatenate([df.loc[:, "source_hgnc_id"].values, 
+    #                                 df.loc[:, "target_hgnc_id"].values]))
     # ids = [30581, 1103]
     hgnc_curies = [("hgnc", gene_id) for gene_id in ids if gene_id is not None]
     
     t0 = time.time()
-    neighbors = indra_shared_upstream_subnetwork(
+    neighbors = query_confounder_relationships(
         nodes=hgnc_curies,
         client=client,
+        relation=["IncreaseAmount", "DecreaseAmount"]
     )
     t1 = time.time()
     print(t1-t0)
 
-    print(len(neighbors))
-
     rows = []
     skipped = 0
     for relation in neighbors:
-        print(skipped)
         rows.append(
             (
                 relation.source_id,

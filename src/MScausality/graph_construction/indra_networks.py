@@ -3,7 +3,7 @@
 import json
 import time
 import os
-from typing import Iterable, Optional, Set, Tuple, List, Dict, Any
+from typing import Iterable, Optional, Set
 
 import click
 import numpy as np
@@ -11,70 +11,12 @@ import pandas as pd
 from indra.databases.hgnc_client import get_hgnc_name, get_uniprot_id, get_hgnc_id
 from protmapper import uniprot_client
 
-from textwrap import dedent
 from indra_cogex.client import Neo4jClient, autoclient
-from indra_cogex.client.subnetwork import indra_shared_upstream_subnetwork, indra_mediated_subnetwork, indra_subnetwork_relations
-from indra_cogex.representation import norm_id
+
+from MScausality.graph_construction.utils import query_between_relationships, query_confounder_relationships, query_mediator_relationships
+
 from dotenv import load_dotenv 
-load_dotenv() 
-
-def query_between_relationships(nodes: Iterable[Tuple[str, str]], 
-                                client: Neo4jClient,
-                                relation: Iterable[str]) -> List[Dict]:
-        
-    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])
-    query = dedent(
-        f"""\
-        MATCH p=(n1:BioEntity)-[r:indra_rel]->(n2:BioEntity)
-        WHERE 
-            n1.id IN [{nodes_str}]
-            AND n2.id IN [{nodes_str}]
-            AND n1.id <> n2.id
-            AND r.stmt_type IN {relation}
-        RETURN p
-    """
-    )
-    return client.query_relations(query)
-
-def query_confounder_relationships(nodes: Iterable[Tuple[str, str]], 
-                                client: Neo4jClient,
-                                relation: Iterable[str]) -> List[Dict]:
-        
-    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])
-    query = dedent(
-        f"""\
-        MATCH p=(n1:BioEntity)<-[r1:indra_rel]-(n3:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
-        WHERE
-            n1.id IN [{nodes_str}]
-            AND n2.id IN [{nodes_str}]
-            AND n1.id <> n2.id
-            AND NOT n3 IN [{nodes_str}]
-            AND r1.stmt_type IN {relation}
-            AND r2.stmt_type IN {relation}
-        RETURN p
-    """
-    )
-    return client.query_relations(query)
-
-def query_mediator_relationships(nodes: Iterable[Tuple[str, str]], 
-                                client: Neo4jClient,
-                                relation: Iterable[str]) -> List[Dict]:
-        
-    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])
-    query = dedent(
-        f"""\
-        MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
-        WHERE
-            n1.id IN [{nodes_str}]
-            AND n2.id IN [{nodes_str}]
-            AND n1.id <> n2.id
-            AND NOT n3 IN [{nodes_str}]
-            AND r1.stmt_type IN {relation}
-            AND r2.stmt_type IN {relation}
-        RETURN p
-    """
-    )
-    return client.query_relations(query)
+load_dotenv()
 
 @autoclient()
 def analysis_uniprot(

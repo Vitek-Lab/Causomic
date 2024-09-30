@@ -1,7 +1,8 @@
 
-import os
 
-# os.environ['KMP_DUPLICATE_LIB_OK']='True'
+from MScausality.simulation.simulation import simulate_data
+
+import os
 
 import pandas as pd
 import numpy as np
@@ -19,9 +20,11 @@ import torch
 
 import networkx as nx
 import y0
+from y0.dsl import Variable
 from y0.algorithm.simplify_latent import simplify_latent_dag
 
 from chirho.interventional.handlers import do
+from chirho.counterfactual.handlers import MultiWorldCounterfactual
 
 # TODO: give user the option to reset parameters or not (new models vs more training)
 # pyro.clear_param_store()
@@ -38,21 +41,17 @@ class ProteomicPerturbationModel(PyroModule):
 
     def forward(self, data):
 
-        # root_coef_dict_mean = dict()
-        # root_coef_dict_scale = dict()
-
         downstream_coef_dict_mean = dict()
         downstream_coef_dict_scale = dict()
 
-        # for node_name in self.root_nodes:
-
-        #     root_coef_dict_mean[node_name] = pyro.sample(f"{node_name}_mean", dist.Normal(0., 1.))
-        #     root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale", dist.Exponential(2.))
+        root_coef_dict_mean = dict()
+        root_coef_dict_scale = dict()
 
         for node_name, items in self.downstream_nodes.items():
 
             downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(
-                f"{node_name}_intercept", dist.Normal(0., 1.))
+                    f"{node_name}_intercept", dist.Normal(0., 1.))
+            
             for item in items:
 
                 downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(
@@ -61,49 +60,48 @@ class ProteomicPerturbationModel(PyroModule):
             downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
                 f"{node_name}_scale", dist.Exponential(2.))
 
+        for node_name in self.root_nodes:
+            root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
+                f"{node_name}_int", dist.Normal(0,1))
+            root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
+                f"{node_name}_scale", dist.Exponential(.25))
+
         # Dictionary to store the Pyro root distribution objects
         downstream_distributions = dict()
-        with pyro.plate("obs", self.n_obs):
+        with pyro.plate("observations", self.n_obs):
             
             # Create Pyro Normal distributions for each node
             for node_name in self.root_nodes:
-
+            
                 # Create a Normal distribution object
                 if "latent" in node_name:
-                    root_sample = pyro.sample(f"{node_name}", dist.Normal(0,1))
-                        # root_coef_dict_mean[node_name], root_coef_dict_scale[node_name]))
+                    root_sample = pyro.sample(f"{node_name}", dist.Normal(
+                        root_coef_dict_scale[f"{node_name}_scale"],
+                        root_coef_dict_scale[f"{node_name}_scale"])
+                        )
                 else:
 
                     missing = pyro.sample(f"missing_{node_name}", dist.Bernoulli(0.25),
                                       obs=data[f"missing_{node_name}"])
 
                     # Impute missing values where needed
-                    # with poutine.mask(mask=~missing.bool()):
-                    #     obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(0, 1))
                     with poutine.mask(mask=missing.bool()):
                         missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(0, 1))  # no obs
-                    
+
                     if f"obs_{node_name}" in data:
                         observed = data[f"obs_{node_name}"].detach_()
                         observed[missing.bool()] = missing_values[missing.bool()]
                         
-                        # obs_values[missing.bool()] = missing_values[missing.bool()]
-
-                        # root_sample = pyro.deterministic(
-                        #     f"{node_name}",
-                        #     torch.where(~missing.bool(), obs_values, missing_values),
-                        #     obs=data[f"obs_{node_name}"]
-                        # )
                         root_sample = pyro.sample(
                             f"{node_name}",
-                            dist.Normal(0, 1),
-                            obs=observed
-                        )
+                            dist.Normal(root_coef_dict_mean[f"{node_name}_int"], 
+                                        root_coef_dict_scale[f"{node_name}_scale"]),
+                            obs=observed)
                     else:
                         root_sample = pyro.sample(
                             f"{node_name}",
-                            dist.Normal(0, 1)
-                        )
+                            dist.Normal(root_coef_dict_mean[f"{node_name}_int"], 
+                                        root_coef_dict_scale[f"{node_name}_scale"]))
 
                 # Store the distribution in the dictionary
                 downstream_distributions[node_name] = root_sample
@@ -125,8 +123,6 @@ class ProteomicPerturbationModel(PyroModule):
                                       obs=data[f"missing_{node_name}"])
 
                 # Impute missing values where needed
-                # with poutine.mask(mask=~missing.bool()):
-                #     obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(mean, scale))
                 with poutine.mask(mask=missing.bool()):
                     missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(mean-scale, scale))  # no obs
 
@@ -134,36 +130,28 @@ class ProteomicPerturbationModel(PyroModule):
                     observed = data[f"obs_{node_name}"].detach_()
                     observed[missing.bool()] = missing_values[missing.bool()]
 
-
-                    # downstream_sample = pyro.deterministic(
-                    #     f"{node_name}",
-                    #     torch.where(~missing.bool(), obs_values, missing_values),
-                    #     obs=data[f"obs_{node_name}"]
-                    # )
                     downstream_sample = pyro.sample(
-                        f"{node_name}",
-                        dist.Normal(mean, scale),
-                        obs=observed
-                    )
+                            f"{node_name}",
+                            dist.Normal(mean, scale),
+                            obs=observed)
                 else:
                     downstream_sample = pyro.sample(
                         f"{node_name}",
-                        dist.Normal(mean, scale)
-                    )
+                        dist.Normal(mean, scale))
 
                 # Store the distribution in the dictionary
                 downstream_distributions[node_name] = downstream_sample
 
-        return downstream_distributions#["Erk"]
+        return downstream_distributions
 
-class ConditionedProteomicModel(PyroModule):
-    def __init__(self, model: ProteomicPerturbationModel):
-        super().__init__()
-        self.model = model
+# class ConditionedProteomicModel(PyroModule):
+#     def __init__(self, model: ProteomicPerturbationModel):
+#         super().__init__()
+#         self.model = model
 
-    def forward(self, condition_data):#**kwargs
-        # with condition(data=condition_data):
-        return self.model(data=condition_data)
+#     def forward(self, condition_data):#**kwargs
+#         # with condition(data=condition_data):
+#         return self.model(data=condition_data)
 
 class ProteomicPerturbationCATE(pyro.nn.PyroModule):
     def __init__(self, model: ProteomicPerturbationModel):
@@ -174,8 +162,10 @@ class ProteomicPerturbationCATE(pyro.nn.PyroModule):
 
         # with do(actions={intervention_node: (torch.tensor(intervention).float())}):#, \
             # condition(data=condition_data):#, MultiWorldCounterfactual(), 
-        with do(actions=intervention):#, \
+        with do(actions=intervention):
             return self.model(data=condition_data)
+        # with MultiWorldCounterfactual(), do(actions=intervention):
+        #     return self.model(data=condition_data)
         
 class LVM: ## TODO: rename to LVM? LVSCM?
     def __init__(self, observational_data, causal_graph):
@@ -337,14 +327,14 @@ class LVM: ## TODO: rename to LVM? LVSCM?
 
     def fit_model(self, num_steps=2000, 
                   initial_lr=.03, gamma=.01,
-                  patience=50, min_delta=5):
+                  patience=100, min_delta=5):
         pyro.set_rng_seed(1234)
 
-        model = ConditionedProteomicModel(
-            ProteomicPerturbationModel(n_obs = len(self.input_data), 
+        #ConditionedProteomicModel(
+        model = ProteomicPerturbationModel(n_obs = len(self.input_data), 
                                        root_nodes = self.root_nodes, 
                                        downstream_nodes = self.descendent_nodes)
-                                       )
+                                    #    )
         condition_data = self.prep_condition_data()
         
         # set up the optimizer
@@ -433,37 +423,30 @@ def build_igf_network():
     graph = nx.DiGraph()
 
     ## Add edges
-    graph.add_edge("EGF", "SOS")
-    graph.add_edge("EGF", "PI3K")
-    graph.add_edge("IGF", "SOS")
-    graph.add_edge("IGF", "PI3K")
-    graph.add_edge("SOS", "Ras")
-    graph.add_edge("Ras", "PI3K")
-    graph.add_edge("Ras", "Raf")
-    graph.add_edge("PI3K", "Akt")
-    graph.add_edge("Akt", "Raf")
-    graph.add_edge("Raf", "Mek")
-    graph.add_edge("Mek", "Erk")
+    graph.add_edge("IL6", "STAT3")
+    graph.add_edge("STAT3", "MYC")
     
     return graph
 
 def build_admg(graph):
     ## Define obs vs latent nodes
-    all_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
-                "Mek", "Erk", "EGF", "IGF"]
-    obs_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
-                "Mek", "Erk"]
-    latent_nodes = ["EGF", "IGF"]
-        
+    all_nodes = ["IL6", "STAT3", "MYC"]
+    obs_nodes = ["IL6", "STAT3", "MYC"]
+            
     attrs = {node: (True if node not in obs_nodes and 
                     node != "\\n" else False) for node in all_nodes}
 
     nx.set_node_attributes(graph, attrs, name="hidden")
     
     ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), "hidden")
+    mapping = dict(zip(list(graph.nodes), 
+                      [Variable(i) for i in list(graph.nodes)]))
+    graph = nx.relabel_nodes(graph, mapping)
+    
+    ## Use y0 to build ADMG
+    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
     y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(graph, "hidden")
+    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
     
     return y0_graph
 
@@ -472,21 +455,37 @@ def main():
     graph = build_igf_network()
     y0_graph = build_admg(graph)
 
-    data = pd.read_csv("data/IGF_pathway/high_missing_protein_data.csv")
-    data = data.drop("originalRUN", axis=1)
-    data = (data - data.mean()) / data.std()
+    # data = pd.read_csv("data/IGF_pathway/high_missing_protein_data.csv")
+    # data = data.drop("originalRUN", axis=1)
+    # data = (data - data.mean()) / data.std()
+
+    ## Coefficients for relations
+    med_coef = {'IL6': {'intercept': 15, "error": 1.},
+                'STAT3': {'intercept': 1.6, "error": .25,  'IL6': 0.5},
+                'MYC': {'intercept': 2, "error": .25, 'STAT3': 1.}
+                }
+    data = pd.DataFrame(simulate_data(graph,
+                    coefficients=med_coef,
+                    include_missing=True,
+                    mar_missing_param=.05,
+                    mnar_missing_param=[-3, .4],
+                    add_feature_var=False,
+                    n=10000,
+                  seed=2)["Protein_data"])
 
     lvm = LVM(data, y0_graph)
     lvm.prepare_graph()
     lvm.prepare_data()
 
     lvm.fit_model(num_steps=100)
-    lvm.intervention({"Erk": (torch.tensor(3.))}, "Erk")
+    # lvm.intervention({"Ras": (torch.tensor(3.))}, "Erk")
 
-    plot_data = lvm.imputed_data[lvm.imputed_data["protein"].isin(["Raf", "Mek"])]
+    # int1 = lvm.posterior_samples
+    # int2 = lvm.intervention_samples
+    # plot_data = lvm.imputed_data[lvm.imputed_data["protein"].isin(["Raf", "Mek"])]
     # pivot wide
-    raf_data = plot_data[plot_data["protein"] == "Raf"]
-    mek_data = plot_data[plot_data["protein"] == "Mek"]
+    # raf_data = plot_data[plot_data["protein"] == "Raf"]
+    # mek_data = plot_data[plot_data["protein"] == "Mek"]
 
     # import matplotlib.pyplot as plt
     # fig, ax = plt.subplots()
@@ -496,201 +495,10 @@ def main():
     # ax.scatter(raf_data["intensity"], mek_data["imp_mean"], alpha=.5, color="orange")
     # ax.scatter(raf_data["imp_mean"], mek_data["imp_mean"], alpha=.5, color="red")
 
-    # ax.hist(zero["Erk"].flatten(), bins=20, alpha=.5, label="Pre-training", density=True)
-    # ax.hist(one["Erk"].flatten(), bins=20, alpha=.5, label="pred", density=True)
+    # ax.hist(int1, bins=20, alpha=.5, label="Pre-training", density=True)
+    # ax.hist(int2, bins=20, alpha=.5, label="pred", density=True)
+
+    # plt.show()
 
 if __name__ == "__main__":
     main()
-
-# def guide(data, root_nodes, downstream_nodes, missing): #TODO: add priors and missing
-
-#     root_coef_dict_mean = dict()
-#     root_coef_dict_scale = dict()
-
-#     downstream_coef_dict_mean = dict()
-#     downstream_coef_dict_scale = dict()
-
-#     for node_name in root_nodes:
-#         loc = pyro.param(f'{node_name}_mean_mean_param', torch.tensor(10.))
-#         loc_scale = pyro.param(f'{node_name}_mean_scale_param', torch.tensor(1.),
-#                         constraint=constraints.positive)
-#         scale = pyro.param(f'{node_name}_scale_param', torch.tensor(2.),
-#                         constraint=constraints.positive)
-
-#         root_coef_dict_mean[node_name] = pyro.sample(f"{node_name}_mean", dist.Normal(loc, loc_scale))
-#         root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale", dist.Exponential(scale))
-
-#     for node_name, items in downstream_nodes.items():
-
-#         intercept_loc = pyro.param(f'{node_name}_intercept_mean_param', torch.tensor(5.))
-#         intercept_scale = pyro.param(f'{node_name}_intercept_scale_param', torch.tensor(2.),
-#                                      constraint=constraints.positive)
-
-#         downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(f"{node_name}_intercept",
-#                                                                           dist.Normal(intercept_loc,
-#                                                                                       intercept_scale))
-
-#         for item in items:
-#             coef_loc = pyro.param(f'{node_name}_{item}_coef_mean_param', torch.tensor(1.))
-#             coef_scale = pyro.param(f'{node_name}_{item}_coef_scale_param', torch.tensor(2.),
-#                                     constraint=constraints.positive)
-
-#             downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
-#                                                                                 dist.Normal(coef_loc, coef_scale))
-
-#         scale = pyro.param(f'{node_name}_scale_param', torch.tensor(2.),
-#                         constraint=constraints.positive)
-#         downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(f"{node_name}_scale",
-#                                                                        dist.Exponential(scale))
-
-#     downstream_distributions = dict()
-#     with pyro.plate("obs", len(data[list(data.keys())[0]])):
-#         # Create Pyro Normal distributions for each node
-#         for node_name in root_nodes:
-
-#             # Create a Normal distribution object
-#             if "latent" in node_name:
-#                 root_sample = pyro.sample(f"{node_name}", dist.Normal(root_coef_dict_mean[node_name],
-#                                                                       root_coef_dict_scale[node_name]))
-    
-# def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
-
-#     root_coef_dict_mean = dict()
-#     root_coef_dict_scale = dict()
-
-#     downstream_coef_dict_mean = dict()
-#     downstream_coef_dict_scale = dict()
-
-#     for node_name in root_nodes:
-
-#         if learned_params is None:
-#             root_coef_dict_mean[node_name] = pyro.sample(f"{node_name}_mean", dist.Normal(0., 1.))
-#             root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale", dist.Exponential(1.))
-#         else:
-#             root_coef_dict_mean[node_name] = pyro.sample(f"{node_name}_mean",
-#                                                          dist.Normal(learned_params[f"{node_name}_mean_mean_param"],
-#                                                                      learned_params[f"{node_name}_mean_scale_param"]))
-#             if "latent" in node_name:
-#                 root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale",
-#                                                               dist.Exponential(1.))
-#             else:
-#                 root_coef_dict_scale[node_name] = pyro.sample(f"{node_name}_scale",
-#                                                               dist.Exponential(learned_params[f"{node_name}_scale_param"]))
-
-#     for node_name, items in downstream_nodes.items():
-
-#         if learned_params is None:
-#             downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(f"{node_name}_intercept",
-#                                                                               dist.Normal(0., 1.))
-#         else:
-#             downstream_coef_dict_mean[f"{node_name}_intercept"] = pyro.sample(f"{node_name}_intercept",
-#                                                               dist.Normal(learned_params[f"{node_name}_intercept_mean_param"],
-#                                                               learned_params[f"{node_name}_intercept_scale_param"]))
-
-#         for item in items:
-
-#             if learned_params is None:
-#                 downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
-#                                                                                     dist.Normal(0., 1.))
-#             else:
-#                 downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(f"{node_name}_{item}_coef",
-#                                                         dist.Normal(learned_params[f"{node_name}_{item}_coef_mean_param"],
-#                                                                     learned_params[f"{node_name}_{item}_coef_scale_param"]))
-
-#         if learned_params is None:
-#             downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(f"{node_name}_scale",
-#                                                                            dist.LogNormal(1., 1.))
-#         else:
-#             downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(f"{node_name}_scale",
-#                                                            dist.Exponential(learned_params[f"{node_name}_scale_param"], 1.))
-
-#     # Dictionary to store the Pyro root distribution objects
-#     downstream_distributions = dict()
-#     if data is not None:
-#         with pyro.plate("obs", len(data[list(data.keys())[0]])):
-
-#             # Create Pyro Normal distributions for each node
-#             for node_name in root_nodes:
-
-#                 # Create a Normal distribution object
-#                 if "latent" in node_name:
-#                     root_sample = pyro.sample(f"{node_name}", dist.Normal(root_coef_dict_mean[node_name],
-#                                                                           root_coef_dict_scale[node_name]))
-#                 else:
-
-#                     imp = pyro.sample(
-#                         f"imp_{node_name}", dist.Normal(
-#                             root_coef_dict_mean[node_name],#-2*root_coef_dict_scale[node_name],
-#                             root_coef_dict_scale[node_name]).mask(False)
-#                     ).detach()
-
-#                     data[node_name][missing[node_name]] = imp[missing[node_name]].to(torch.double)
-
-#                     root_sample = pyro.sample(f"{node_name}",
-#                                               dist.Normal(root_coef_dict_mean[node_name],
-#                                                           root_coef_dict_scale[node_name]),
-#                                               obs=data[node_name])
-
-#                 # Store the distribution in the dictionary
-#                 downstream_distributions[node_name] = root_sample
-
-#             # Create pyro linear regression obj for each downstream node
-#             for node_name, items in downstream_nodes.items():
-
-#                 # calculate mean as sum of upstream items
-#                 mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-#                 for item in items:
-#                     coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-#                     mean = mean + coef*downstream_distributions[item]
-
-#                 # Define scale
-#                 scale = downstream_coef_dict_scale[f"{node_name}_scale"]
-                
-#                 # Impute missing values where needed
-#                 with poutine.mask(mask=~missing[node_name]):
-#                     obs_values = pyro.sample(f"obs_{node_name}", dist.Normal(mean, scale), obs=data[node_name])
-#                 with poutine.mask(mask=missing[node_name]):
-#                     missing_values = pyro.sample(f"imp_{node_name}", dist.Normal(mean, scale))  # no obs
-#                 downstream_sample = pyro.deterministic(
-#                     f"{node_name}",
-#                     torch.where(~missing[node_name], obs_values, missing_values),
-#                 )
-
-#                 # Store the distribution in the dictionary
-#                 downstream_distributions[node_name] = downstream_sample
-#     else:
-#         for node_name in root_nodes:
-
-#             # Create a Normal distribution object
-#             if "latent" in node_name:
-#                 root_sample = pyro.sample(f"{node_name}",
-#                                           dist.Normal(root_coef_dict_mean[node_name],
-#                                                       root_coef_dict_scale[node_name]))
-#             else:
-#                 root_sample = pyro.sample(f"{node_name}",
-#                                           dist.Normal(root_coef_dict_mean[node_name],#-2*root_coef_dict_mean[node_name],
-#                                                       root_coef_dict_scale[node_name]))
-
-#             # Store the distribution in the dictionary
-#             downstream_distributions[node_name] = root_sample
-
-#         # Create pyro linear regression obj for each downstream node
-#         for node_name, items in downstream_nodes.items():
-
-#             # calculate mean as sum of upstream items
-#             mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-#             for item in items:
-#                 coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-#                 mean = mean + coef * downstream_distributions[item]
-
-#             # Define scale
-#             scale = downstream_coef_dict_scale[f"{node_name}_scale"]
-
-#             # Create a Normal distribution object
-#             downstream_sample = pyro.sample(f"{node_name}",
-#                                             dist.Normal(mean,#-2*mean,
-#                                                         scale))
-
-#             # Store the distribution in the dictionary
-#             downstream_distributions[node_name] = downstream_sample
-#     return downstream_distributions

@@ -1,7 +1,9 @@
 
 from indra.databases.hgnc_client import get_uniprot_id, get_hgnc_id, get_hgnc_name
-from indra_cogex.client.subnetwork import get_neighbor_network
+
 from indra_cogex.client import Neo4jClient
+
+from MScausality.graph_construction.utils import get_neighbor_network, query_confounder_relationships
 
 from protmapper import uniprot_client
 
@@ -50,21 +52,33 @@ def get_neighbors(ids, id_type, client, evidence_count=5,
     hgnc_id = get_id(ids, id_type)
     # get the network
     # for i in range(levels):
-    neighbors = get_neighbor_network(
-        nodes=hgnc_id,
-        client=client,
-        upstream=upstream,
-        downstream=downstream,
-        minimum_evidence_count=evidence_count)
+    if upstream:
+        neighbors_u = get_neighbor_network(
+            nodes=hgnc_id,
+            client=client,
+            upstream=upstream,
+            downstream=False,
+            minimum_evidence_count=evidence_count)
+    else:
+        neighbors_u = list()
+    if downstream: 
+        neighbors_d = get_neighbor_network(
+            nodes=hgnc_id,
+            client=client,
+            upstream=False,
+            downstream=downstream,
+            minimum_evidence_count=evidence_count)
+    else:
+        neighbors_d = list()
+
+    neighbors = neighbors_u + neighbors_d
 
     columns = [
         "source_hgnc_id",
         "source_hgnc_symbol",
-        # "source_uniprot_id",
         "relation",
         "target_hgnc_id",
         "target_hgnc_symbol",
-        # "target_uniprot_id",
         "stmt_hash",
         "evidence_count"
     ]
@@ -90,13 +104,49 @@ def get_neighbors(ids, id_type, client, evidence_count=5,
 
     df = pd.DataFrame(rows, columns=columns)
     df.drop_duplicates(subset=["stmt_hash"], inplace=True)
-    df = df.loc[df["evidence_count"] >= evidence_count]
-    df = df[df["relation"].isin(["IncreaseAmount", "DecreaseAmount"])]
     df = df[(-pd.isna(df["source_hgnc_symbol"])) & (-pd.isna(df["target_hgnc_symbol"]))]
 
-    df = df.loc[:, ["source_hgnc_symbol", "target_hgnc_symbol"]].drop_duplicates()
+    return df
+
+def get_counfounders(ids, id_type, client, evidence_count=5):
+    hgnc_id = get_id(ids, id_type)
+    confounders = query_confounder_relationships(hgnc_id, client, evidence_count)
+
+    columns = [
+        "source_hgnc_id",
+        "source_hgnc_symbol",
+        "relation",
+        "target_hgnc_id",
+        "target_hgnc_symbol",
+        "stmt_hash",
+        "evidence_count"
+    ]
+
+    rows = []
+    skipped = 0
+    for relation in confounders:
+        print(skipped)
+        rows.append(
+            (
+                relation.source_id,
+                get_hgnc_name(relation.source_id),
+                # source_uniprot,
+                relation.data["stmt_type"],
+                relation.target_id,
+                get_hgnc_name(relation.target_id),
+                # target_uniprot,
+                relation.data["stmt_hash"],
+                sum(json.loads(relation.data["source_counts"]).values())
+            )
+        )
+        skipped+=1
+
+    df = pd.DataFrame(rows, columns=columns)
+    df.drop_duplicates(subset=["stmt_hash"], inplace=True)
+    df = df[(-pd.isna(df["source_hgnc_symbol"])) & (-pd.isna(df["target_hgnc_symbol"]))]
 
     return df
+
 
 def build_network(initial_nodes, id_type, client, evidence_count=5, levels=3,
                   upstream=True, downstream=True):
@@ -108,6 +158,9 @@ def build_network(initial_nodes, id_type, client, evidence_count=5, levels=3,
     if type(downstream) != list:
         downstream = [downstream] * levels
 
+    neighbors_con_list = list()
+
+    # Get neighbors for each level
     for i in range(levels):
         neighbors = get_neighbors(initial_nodes, 
                                   id_type, 
@@ -117,9 +170,21 @@ def build_network(initial_nodes, id_type, client, evidence_count=5, levels=3,
                                   downstream[i])
         
         # Concat target and source symbols into a list and remove duplicates
-        source_nodes = neighbors["source_hgnc_symbol"].unique()
-        target_nodes = neighbors["target_hgnc_symbol"].unique()
+        new_nodes = neighbors.loc[:, ["source_hgnc_symbol", 
+                                      "target_hgnc_symbol"]].drop_duplicates()
+        source_nodes = new_nodes["source_hgnc_symbol"].unique()
+        target_nodes = new_nodes["target_hgnc_symbol"].unique()
         initial_nodes = list(set(source_nodes).union(set(target_nodes)))
+
+        neighbors_con_list.append(neighbors)
+
+    # Get upstream confounders
+    # TODO: Update extraction to actually get both edges of confounding
+    # confounders = get_counfounders(initial_nodes, id_type, client, evidence_count[0])
+    # neighbors_con_list.append(confounders)
+
+    neighbors = pd.concat(neighbors_con_list)
+    neighbors = neighbors.drop_duplicates().reset_index(drop=True)
 
     return neighbors
 
@@ -129,17 +194,24 @@ def main():
                             os.getenv("PASSWORD"))
                     )
     
-    network = build_network(["BRD2", "BRD3", "BRD4"], "gene", client, 
-                            evidence_count=[20, 20], levels=2,
-                            upstream=True, downstream=True)
+    network = build_network(["MYC"], "gene", client, 
+                            evidence_count=[100, 100, 70,50], levels=2,
+                            upstream=True, downstream=[True, False, False, False])
     
+    print(network)
     graph = nx.DiGraph()
     for i in range(len(network)):
-        graph.add_edge(network.iloc[i, 0], network.iloc[i, 1])
+        graph.add_edge(network.loc[i, "source_hgnc_symbol"], 
+                       network.loc[i, "target_hgnc_symbol"])
     pos = nx.nx_agraph.graphviz_layout(graph, prog="neato")
     nx.draw_networkx(graph, pos)
 
     plt.show()
+    print(os.getcwd())
+    network.reset_index(drop=True).to_csv(
+            "data/INDRA_networks/MYC/4_step_MYC.tsv",
+            sep="\t",
+            index=False)
 
 if __name__ == "__main__":
     main()

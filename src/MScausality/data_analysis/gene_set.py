@@ -38,7 +38,7 @@ def prep_msstats_data(data, parse_gene=False, gene_map=None):
 
     parse_data = data[['Protein', 'originalRUN', 'LogIntensities']]
     wide_data = parse_data.pivot(index='originalRUN', columns='Protein', values='LogIntensities')
-    wide_data = wide_data.iloc[:, 1:]  # Exclude the first column (originalRUN) if needed
+    wide_data = wide_data.iloc[:, :]  # Exclude the first column (originalRUN) if needed
 
     return wide_data
 
