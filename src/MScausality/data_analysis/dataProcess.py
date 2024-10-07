@@ -3,8 +3,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import copy
+
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import LabelEncoder
+
 
 def format_sim_data(data):
       
@@ -25,6 +28,12 @@ def format_sim_data(data):
         "_" + data.loc[:, "PeptideSequence"].astype(str)
     data.loc[:, "Run"] = data.loc[:, "Run"].astype(str) + "_" + \
       data.loc[:, "Condition"].astype(str)
+    
+    data.loc[:, "Feature"] = data.loc[:, "PeptideSequence"].astype(str) \
+      + "_" + \
+      data.loc[:, "PrecursorCharge"].astype(str) + "_" + \
+      data.loc[:, "FragmentIon"].astype(str) + "_" + \
+      data.loc[:, "ProductCharge"].astype(str) + "_"
 
     return data
 
@@ -56,6 +65,68 @@ def normalize_median(data):
     
     return data
 
+def topn_feature_selection(data, n):
+      
+    proteins = data["ProteinName"].unique()
+    con_list = list()
+
+    for i in range(len(proteins)):
+         temp_data = data.loc[data["ProteinName"] == proteins[i]]
+         
+         # Calculate top features by highest mean intensity
+         top_features = temp_data.groupby('Feature')['Intensity'].mean()
+         top_features = top_features.sort_values(ascending=False).head(n)
+         temp_data = temp_data[temp_data['Feature'].isin(top_features.index)]
+         
+         con_list.append(temp_data)
+    
+    data = pd.concat(con_list, ignore_index=True)
+    return data
+
+def imputation(data):
+    """
+    Imputation by linear model
+    """
+    # Encoding 'Run' and 'Feature' as numerical values
+    run_dummies = pd.get_dummies(data['Run'])
+    feature_dummies = pd.get_dummies(data['Feature'])
+
+    model_data = pd.concat([run_dummies, feature_dummies, 
+                            data["Intensity"]], axis=1)
+
+    train_data = model_data[model_data['Intensity'].notna()]
+    test_data = model_data[model_data['Intensity'].isna()]
+
+    X_train = train_data[[i for i in train_data.columns if i != 'Intensity']]
+    y_train = train_data['Intensity']
+
+    # Prepare X for testing
+    X_test = test_data[[i for i in test_data.columns if i != 'Intensity']]
+
+    # Fit the model
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    # Predict missing values
+    predicted_values = model.predict(X_test)
+
+    # Fill missing values with the predictions
+    na_summary = data['Intensity'].isna().groupby(
+         data['Run']).sum().values < data.groupby(
+              data['Run'])["ProteinName"].count().values
+    keep_runs = data['Run'].unique()[na_summary]
+    
+    model_data.loc[model_data['Intensity'].isna(), 
+                   'Intensity'] = predicted_values
+    model_data.loc[:, 'Intensity'] = np.where(
+         (data["Run"].isin(keep_runs).values), 
+         model_data.loc[:, 'Intensity'], np.nan)
+
+    data = pd.concat([data[[i for i in data.columns if i != 'Intensity']], 
+                      model_data["Intensity"]], axis=1)
+
+    return data
+
 def tukey_median_polish(data, eps = 0.01, maxiter=10, trace_iter=True, na_rm=True):
 
       z = copy.copy(data)
@@ -67,7 +138,7 @@ def tukey_median_polish(data, eps = 0.01, maxiter=10, trace_iter=True, na_rm=Tru
       r = np.array([0 for _ in range(nr)])
       c = np.array([0 for _ in range(nc)])
 
-      for iter in range(maxiter):
+      for _ in range(maxiter):
             rdelta = list()
             if na_rm:
                   for i in range(nr):
@@ -130,14 +201,10 @@ def tukey_median_polish(data, eps = 0.01, maxiter=10, trace_iter=True, na_rm=Tru
       ans = {"overall": t, "row": r, "col": c, "residuals": z}
       return ans
 
-def summarize_data(data):
+def summarize_data(data, MBimpute):
     """
     Summarize data by Tukey median polish
     """
-    data.loc[:, "Feature"] = data.loc[:, "PeptideSequence"].astype(str) + "_" + \
-      data.loc[:, "PrecursorCharge"].astype(str) + "_" + \
-      data.loc[:, "FragmentIon"].astype(str) + "_" + \
-      data.loc[:, "ProductCharge"].astype(str) + "_"
 
     summarized_data = pd.DataFrame()
     proteins = data["ProteinName"].unique()
@@ -145,6 +212,9 @@ def summarize_data(data):
     for i in range(len(proteins)):
         protein = proteins[i]
         protein_data = data[data["ProteinName"] == protein]
+        if MBimpute:
+            protein_data = imputation(protein_data)
+
         protein_data = protein_data.pivot(index='Feature', 
                                           columns='Run', 
                                           values='Intensity')
@@ -156,7 +226,10 @@ def summarize_data(data):
         summarized_data.loc[:, protein] = tmp_data
     return summarized_data
 
-def dataProcess(data, normalization="equalizeMedians", MBimpute=True,
+def dataProcess(data, normalization="equalizeMedians", 
+                feature_selection="All",
+                n_features=3,
+                MBimpute=True,
                 sim_data=False):
 
     """
@@ -197,32 +270,38 @@ def dataProcess(data, normalization="equalizeMedians", MBimpute=True,
     :return:
     """
     # TODO: Implement dataProcess function in Python
-    #       - Normalization by equalizing medians across runs
+    #       - TopN feature selection
     #       - Imputation by accelerated failure time model
-    #       - Summarization by tukey median polish
 
     if sim_data:
         data = format_sim_data(data)
     else:
         data["Intensity"] = np.log2(data["Intensity"])
+        data.loc[:, "Feature"] = data.loc[:, "PeptideSequence"].astype(str) \
+            + "_" + \
+            data.loc[:, "PrecursorCharge"].astype(str) + "_" + \
+            data.loc[:, "FragmentIon"].astype(str) + "_" + \
+            data.loc[:, "ProductCharge"].astype(str) + "_"
 
     if normalization == "equalizeMedians":
         data = normalize_median(data)
-    
-    print("TODO: imputation")
-    data = summarize_data(data)
 
-    return data
+    if feature_selection == "TopN":
+        data = topn_feature_selection(data, n_features)
+
+    summarized_data = summarize_data(data, MBimpute)
+
+    return summarized_data
 
 
 def main():
     # Test dataProcess function
     data = pd.read_csv("data/methods_paper_data/tf_sim/simple_regression_feature_data.csv")
-    test = dataProcess(data, sim_data=True)
+    test = dataProcess(data, feature_selection="TopN", sim_data=True)
     print(test)
 
     fig, ax = plt.subplots()
-    ax.scatter(test["STAT3"], test["MYC"])
+    ax.scatter(test["IL6"], test["MYC"])
     plt.show()
 
 if __name__ == "__main__":

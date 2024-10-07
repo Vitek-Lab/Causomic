@@ -5,6 +5,9 @@ import networkx as nx
 
 import pickle
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 def simulate_data(graph,
                   coefficients=None,
                   include_missing=True,
@@ -218,18 +221,22 @@ def generate_features(data, node):
     feature_level_data = pd.DataFrame(columns=["Protein", "Replicate", 
                                                "Feature", "Intensity"])
 
-    number_features = np.random.randint(3, 20)
-    feature_effects = [np.random.uniform(-2, 2) for _ in range(number_features)]
+    number_features = np.random.randint(5, 20)
+    feature_effects = [np.random.uniform(-.75, .75) for _ in range(number_features)]
 
     for i in range(len(data)):
         for j in range(number_features):
-            feature_level_data = pd.concat([feature_level_data, 
-                                            pd.DataFrame(
-                                                {"Protein": [node],
-                                                 "Replicate": [i],
-                                                 "Feature": [j],
-                                                 "Intensity": [data[i] + feature_effects[j]]})],
-                                                 ignore_index=True)
+            
+            # Measurement error
+            error = np.random.normal(0, .25)
+            feature_level_data = pd.concat(
+                [feature_level_data, 
+                 pd.DataFrame(
+                     {"Protein": [node],
+                      "Replicate": [i],
+                      "Feature": [j],
+                      "Intensity": [data[i] + feature_effects[j] + error]}
+                      )], ignore_index=True)
 
     return feature_level_data
 
@@ -273,6 +280,20 @@ def add_missing(feature_level_data, mar_missing_param, mnar_missing_param):
             feature_level_data.loc[i, "MNAR"] = False
 
     return feature_level_data
+
+def simple_profile_plot(data, protein, intensity_col="Obs_Intensity"):
+    fig, ax = plt.subplots()
+
+    plot_data = data[data["Protein"] == protein]
+
+    sns.scatterplot(x=plot_data.loc[:, "Replicate"], 
+                y=plot_data.loc[:, intensity_col], 
+                hue=plot_data.loc[:, "Feature"].astype(str))
+    sns.lineplot(x=plot_data.loc[:, "Replicate"], 
+                y=plot_data.loc[:, intensity_col], 
+                hue=plot_data.loc[:, "Feature"].astype(str))
+    ax.get_legend().remove()
+    ax.set_title(protein)
 
 
 def build_igf_network(cell_confounder):

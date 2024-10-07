@@ -23,404 +23,248 @@ from sklearn.impute import KNNImputer
 import warnings
 warnings.filterwarnings('ignore')
 
-## General benchmarking functions ----------------------------------------------
-def get_std_error(
-        graph,
-        data,
-        treatments,
-        outcome,
-        _adjustment_set=None):
-
-    treatments = y0.graph._ensure_set(treatments)
-    if _adjustment_set:
-        adjustment_set = _adjustment_set
-    else:
-        adjustment_set, _ = get_adjustment_set(graph=graph, 
-                                               treatments=treatments, 
-                                               outcome=outcome)
-    variable_set = adjustment_set.union(treatments).difference({outcome})
-    variables = sorted(variable_set, key=attrgetter("name"))
-    model = linregress(data[[v.name for v in variables]].values.flatten(), 
-                       data[outcome.name].values)
+def build_igf_network():
+    """
+    Create IGF graph in networkx
     
-    return model.stderr*np.sqrt(len(data))
+    cell_confounder : bool
+        Whether to add in cell type as a confounder
+    """
+    graph = nx.DiGraph()
 
-def comparison(full_graph, 
-               y0_graph, 
-               coefficients, 
-               int1, int2, 
+    ## Add edges
+    graph.add_edge("EGF", "SOS")
+    graph.add_edge("EGF", "PI3K")
+    graph.add_edge("IGF", "SOS")
+    graph.add_edge("IGF", "PI3K")
+    graph.add_edge("SOS", "Ras")
+    graph.add_edge("Ras", "PI3K")
+    graph.add_edge("Ras", "Raf")
+    graph.add_edge("PI3K", "Akt")
+    graph.add_edge("Akt", "Raf")
+    graph.add_edge("Raf", "Mek")
+    graph.add_edge("Mek", "Erk")
+    
+    return graph
+
+def build_admg(graph, cell_confounder=False, cell_latent=False):
+    ## Define obs vs latent nodes
+    all_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
+                 "Mek", "Erk", "EGF", "IGF"]
+    obs_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
+                 "Mek", "Erk"]
+    latent_nodes = ["EGF", "IGF"]
+    
+    ## Add in cell_type if included
+    if cell_confounder:
+        all_nodes.append("cell_type")
+        if cell_latent:
+            latent_nodes.append("cell_type")
+        else:
+            obs_nodes.append("cell_type")
+        
+    attrs = {node: (True if node not in obs_nodes and 
+                    node != "\\n" else False) for node in all_nodes}
+
+    nx.set_node_attributes(graph, attrs, name="hidden")
+    
+    ## Use y0 to build ADMG
+    # simplified_graph = simplify_latent_dag(graph.copy(), "hidden")
+    y0_graph = y0.graph.NxMixedGraph()
+    y0_graph = y0_graph.from_latent_variable_dag(graph, "hidden")
+    
+    return y0_graph
+
+alt_graph = y0.graph.NxMixedGraph()
+alt_graph.add_directed_edge("SOS", "Ras")
+alt_graph.add_directed_edge("Ras", "PI3K")
+alt_graph.add_directed_edge("Ras", "Raf")
+alt_graph.add_directed_edge("PI3K", "Akt")
+alt_graph.add_directed_edge("Akt", "Raf")
+alt_graph.add_directed_edge("Raf", "Mek")
+alt_graph.add_directed_edge("Mek", "Erk")
+
+int_graph = y0.graph.NxMixedGraph()
+int_graph.add_directed_edge("SOS", "Ras")
+int_graph.add_directed_edge("Ras", "Erk")
+
+bulk_graph = build_igf_network()
+y0_graph_bulk = build_admg(bulk_graph)
+
+cell_coef = {'EGF': {'intercept': 10., "error": 1},
+              'IGF': {'intercept': 8., "error": 1},
+              'SOS': {'intercept': -2, "error": .5, 
+                      'EGF': 0.6, 'IGF': 0.6},
+              'Ras': {'intercept': 3, "error": .5, 'SOS': .5},
+              'PI3K': {'intercept': 1.6, "error": .5, 
+                       'EGF': .5, 'IGF': 0.5, 'Ras': .5},
+              'Akt': {'intercept': 3., "error": .5, 'PI3K': 0.75},
+              'Raf': {'intercept': 8, "error": .5,
+                      'Ras': 0.8, 'Akt': -.4},
+              'Mek': {'intercept': 3., "error": .5, 'Raf': 0.75},
+              'Erk': {'intercept': 0., "error": .5, 'Mek': 1.2}
+             }
+
+def intervention(model, int1, int2, outcome, scale_metrics):
+    ## MScausality results
+    model.intervention({list(int1.keys())[0]: (list(int1.values())[0] \
+                                            - scale_metrics["mean"]) \
+                                                / scale_metrics["std"]}, outcome)
+    mscausality_int_low = model.intervention_samples
+    model.intervention({list(int2.keys())[0]: (list(int2.values())[0] \
+                                            - scale_metrics["mean"]) \
+                                                / scale_metrics["std"]}, outcome)
+    mscausality_int_high = model.intervention_samples
+
+    mscausality_int_low = ((mscausality_int_low*scale_metrics["std"]) \
+                        + scale_metrics["mean"])
+    mscausality_int_high = ((mscausality_int_high*scale_metrics["std"]) \
+                            + scale_metrics["mean"])
+    mscausality_ate = mscausality_int_high.mean() - mscausality_int_low.mean()
+
+    return mscausality_ate
+
+
+def comparison(bulk_graph, 
+               y0_graph_bulk, 
+               cell_coef, 
+               int1, 
+               int2, 
                outcome,
-               obs_data=None,
-               training_obs=1000,
-               alt_graph=None
-               ):
-    """
-    Compare the results of the full graph with the y0 graph
+               alt_graph,
+               int_graph,
+               data):
     
-    """
+    # Ground truth
+    intervention_low = simulate_data(bulk_graph, coefficients=cell_coef,
+                                    intervention=int1, mnar_missing_param=[-4, .3],
+                                    add_feature_var=False, n=10000, seed=2)
 
-    ## Ground truth
-    if obs_data is None:
-        obs_data = pd.DataFrame(simulate_data(full_graph, 
-                                              coefficients=coefficients, 
-                                              add_feature_var=False, 
-                                              n=training_obs, seed=2)
-                            ["Protein_data"])
+    intervention_high = simulate_data(bulk_graph, coefficients=cell_coef,
+                                    intervention=int2, 
+                                    add_feature_var=False, n=10000, seed=2)
 
-    intervention_low = simulate_data(full_graph, coefficients=coefficients,
-                                     intervention=int1, 
-                                     add_feature_var=False, n=10000, seed=2)
-
-    intervention_high = simulate_data(full_graph, coefficients=coefficients,
-                                     intervention=int2, 
-                                     add_feature_var=False, n=10000, seed=2)
-
-    ## Eliator results
-    if obs_data.isnull().values.any():
-        imputer = KNNImputer(n_neighbors=3)
-
-        # Impute missing values
-        obs_data_eliator = obs_data.copy()
-        obs_data_eliator = pd.DataFrame(imputer.fit_transform(obs_data_eliator), 
-                                        columns=obs_data.columns)
-        # def impute_with_normal(df):
-        #     for col in df.columns:
-        #         missing = df[col].isnull()
-        #         if missing.any():
-        #             # Sample from normal distribution based on column mean and std
-        #             df.loc[missing, col] = np.random.normal(df[col].mean(), df[col].std(), missing.sum())
-        #     return df
-        # obs_data_eliator = impute_with_normal(obs_data_eliator)
-    else:
-        obs_data_eliator = obs_data.copy()
+    gt_ate = (intervention_high["Protein_data"][outcome].mean() \
+          - intervention_low["Protein_data"][outcome].mean() )
+    
+    # Eliator prediction
+    imputer = KNNImputer(n_neighbors=5)
+    obs_data_eliator = data.copy()
+    obs_data_eliator = pd.DataFrame(imputer.fit_transform(obs_data_eliator), 
+                                    columns=data.columns)
 
     eliator_int_low = summary_statistics(
-        y0_graph, obs_data_eliator,
+        y0_graph_bulk, obs_data_eliator,
         treatments={Variable(list(int1.keys())[0])},
         outcome=Variable(outcome),
         interventions={
             Variable(list(int1.keys())[0]): list(int1.values())[0]})
 
     eliator_int_high = summary_statistics(
-        y0_graph, obs_data_eliator,
+        y0_graph_bulk, obs_data_eliator,
         treatments={Variable(list(int2.keys())[0])},
         outcome=Variable(outcome),
         interventions={
             Variable(list(int2.keys())[0]): list(int2.values())[0]})
     
-    eliator_std_error = get_std_error(
-        y0_graph, obs_data_eliator, 
-        treatments={Variable(list(int2.keys())[0])}, 
-        outcome=Variable(outcome))
+    eliator_ate = eliator_int_high.mean - eliator_int_low.mean
 
-
-    ## MScausality results
-    if alt_graph is None:
-        alt_graph = y0_graph
+    # Basic Bayesian model
     pyro.clear_param_store()
-
-    transformed_data = normalize(obs_data, wide_format=True)
+    transformed_data = normalize(data, wide_format=True)
     input_data = transformed_data["df"]
     scale_metrics = transformed_data["adj_metrics"]
 
+    lvm = LVM(input_data, int_graph)
+    lvm.prepare_graph()
+    lvm.prepare_data()
+    lvm.get_priors()
+
+    lvm.fit_model(num_steps=10000)
+
+    pyro.clear_param_store()
+    lvm.fit_model(num_steps=10000)
+    
+    basic_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
+
+    # Informative prior Bayesian model
+    pyro.clear_param_store()
+    lvm.priors['Erk']['Erk_Ras_coef'] = 1.
+    lvm.fit_model(num_steps=10000)
+    
+    inf_prior_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
+
+    # Full imp Bayesian model
     lvm = LVM(input_data, alt_graph)
     lvm.prepare_graph()
     lvm.prepare_data()
+    lvm.get_priors()
+
+    pyro.clear_param_store()
     lvm.fit_model(num_steps=10000)
 
-    lvm.intervention({list(int1.keys())[0]: (list(int1.values())[0] - scale_metrics["mean"]) / scale_metrics["std"]}, outcome)
-    mscausality_int_low = lvm.intervention_samples
-    lvm.intervention({list(int2.keys())[0]: (list(int2.values())[0] - scale_metrics["mean"]) / scale_metrics["std"]}, outcome)
-    mscausality_int_high = lvm.intervention_samples
-    
-    
-    mscausality_int_low = (mscausality_int_low*scale_metrics["std"]) + scale_metrics["mean"]
-    mscausality_int_high = (mscausality_int_high*scale_metrics["std"]) + scale_metrics["mean"]
+    full_imp_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
 
+    # Full imp Bayesian model with informative prior
+    lvm = LVM(input_data, alt_graph)
+    lvm.prepare_graph()
+    lvm.prepare_data()
+    lvm.get_priors()
+
+    for i in lvm.priors.keys():
+        for v in lvm.priors[i].keys():
+            if (v != "Raf_Akt_coef") & ("coef" in v): 
+                if (lvm.priors[i][v]) < .75:
+                    lvm.priors[i][v] = 1
+    # lvm.priors["Mek"]["Mek_Raf_coef"] = 1.
+
+    pyro.clear_param_store()
+    lvm.fit_model(num_steps=10000)
+
+    
+    full_imp_inf_post_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
+    
     result_df = pd.DataFrame({
-        "Ground_truth": [np.mean(intervention_low["Protein_data"][outcome]), 
-                         np.mean(intervention_high["Protein_data"][outcome])],
-        "Ground_truth_std": [np.std(intervention_low["Protein_data"][outcome]), 
-                             np.std(intervention_high["Protein_data"][outcome])],
-        "Eliator": [eliator_int_low.mean, eliator_int_high.mean],
-        "Eliator_std": [eliator_std_error, eliator_std_error],
-        "MScausality": [np.mean(np.array(mscausality_int_low)), 
-                        np.mean(np.array(mscausality_int_high))],
-        "MScausality_std": [np.std(np.array(mscausality_int_low)), 
-                            np.std(np.array(mscausality_int_high))]
+        "Ground_truth": [gt_ate],
+        "Eliator": [eliator_ate],
+        "Basic_model": [basic_model_ate.item()],
+        "Inf_prior": [inf_prior_model_ate.item()],
+        "Full_imp": [full_imp_model_ate.item()],
+        "Full_imp_inf_post": [full_imp_inf_post_model_ate.item()]
     })
 
     return result_df
 
-def benchmark_comparison(full_graph, y0_graph, coef):
 
-    replicates = [10, 30, 100, 1000]
-    result = dict()
+int1 = {"Ras": 5}
+int2 = {"Ras": 7}
+outcome = "Erk"
 
-    for r in range(len(replicates)):
-        temp_r = replicates[r]
 
-        eliate_ate = list()
-        mscausality_ate = list()
-        eliate_var = list()
-        mscausality_var = list()
+result = list()
 
-        for i in range(100):
+for i in range(30):
 
-            sr_data = simulate_data(full_graph, coefficients=coef, 
-                                    add_feature_var=True, n=temp_r, seed=i)
+    temp_data = simulate_data(bulk_graph, coefficients=cell_coef, 
+                                mnar_missing_param=[-4, .3], 
+                                add_feature_var=True, n=50, seed=i)
 
-            sr_data = dataProcess(sr_data["Feature_data"], normalization=False, sim_data=True)
-            
-            result_data = comparison(full_graph, y0_graph, coef, {"IL6": 5}, 
-                {"IL6": 7}, "MYC", obs_data=sr_data)
+    summarized_data = dataProcess(temp_data["Feature_data"], 
+                            normalization=False, 
+                            feature_selection="All",
+                            MBimpute=False,
+                            sim_data=True)
 
-            eliate_ate.append(result_data.loc[1, "Eliator"] - result_data.loc[0, "Eliator"])
-            mscausality_ate.append(result_data.loc[1, "MScausality"] - result_data.loc[0, "MScausality"])
-            eliate_var.append(result_data.loc[1, "Eliator_std"])
-            mscausality_var.append(result_data.loc[1, "MScausality_std"])
-
-        result[str(temp_r)] = {"eliate_ate": eliate_ate, 
-                               "mscausality_ate": mscausality_ate,
-                               "eliate_var": eliate_var, 
-                               "mscausality_var": mscausality_var}
-        
-    return result
-
-# Build graphs -----------------------------------------------------------------
-# Two node
-def build_sr_network():
-    """
-    Create TF MYC graph in networkx
     
-    """
-    graph = nx.DiGraph()
+    result_data = comparison(
+        bulk_graph, y0_graph_bulk, cell_coef, {"Ras": 5}, {"Ras": 7}, 
+        "Erk", alt_graph, int_graph, summarized_data)
 
-    ## Add edges
-    graph.add_edge("IL6", "MYC")
-    
-    return graph
+    result.append(result_data)
 
-def build_sr_admg(graph):
+result = pd.concat(result, ignore_index=True)
 
-    """
+import pickle
 
-    Creates acyclic directed mixed graph (ADMG) from networkx graph with latent variables.
-    
-    """
-
-    ## Define obs vs latent nodes
-    all_nodes = ["IL6", "MYC"]
-    obs_nodes = ["IL6", "MYC"]
-            
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
-
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    mapping = dict(zip(list(graph.nodes), 
-                      [Variable(i) for i in list(graph.nodes)]))
-    graph = nx.relabel_nodes(graph, mapping)
-    
-    ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
-    
-    return y0_graph
-
-# 3 node
-def build_tf_med_network():
-    """
-    Create TF MYC graph in networkx
-    
-    """
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("IL6", "STAT3")
-    graph.add_edge("STAT3", "MYC")
-    
-    return graph
-
-def build_med_admg(graph):
-
-    """
-
-    Creates acyclic directed mixed graph (ADMG) from networkx graph with latent variables.
-    
-    """
-
-    ## Define obs vs latent nodes
-    all_nodes = ["IL6", "STAT3", "MYC"]
-    obs_nodes = ["IL6", "STAT3", "MYC"]
-            
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
-
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    mapping = dict(zip(list(graph.nodes), 
-                      [Variable(i) for i in list(graph.nodes)]))
-    graph = nx.relabel_nodes(graph, mapping)
-    
-    ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
-    
-    return y0_graph
-
-
-# 3 node with latent
-def build_tf_med_lat_network():
-    """
-    Create TF MYC graph in networkx
-    
-    """
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("IL6", "STAT3")
-    graph.add_edge("STAT3", "MYC")
-    
-    graph.add_edge("C1", "STAT3")
-    graph.add_edge("C1", "MYC")
-    
-    return graph
-
-def build_med_lat_admg(graph):
-
-    """
-
-    Creates acyclic directed mixed graph (ADMG) from networkx graph with latent variables.
-    
-    """
-
-    ## Define obs vs latent nodes
-    all_nodes = ["IL6", "STAT3", "MYC", "C1"]
-    obs_nodes = ["IL6", "STAT3", "MYC"]
-            
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
-
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    mapping = dict(zip(list(graph.nodes), 
-                      [Variable(i) for i in list(graph.nodes)]))
-    graph = nx.relabel_nodes(graph, mapping)
-    
-    ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
-    
-    return y0_graph
-
-# 3 node 2 latents
-def build_tf_med_more_lat_network():
-    """
-    Create TF MYC graph in networkx
-    
-    """
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("IL6", "STAT3")
-    graph.add_edge("STAT3", "M2")
-    graph.add_edge("M2", "MYC")
-    
-    graph.add_edge("C1", "STAT3")
-    graph.add_edge("C1", "MYC")
-    graph.add_edge("C2", "M2")
-    graph.add_edge("C2", "MYC")
-    
-    return graph
-
-def build_med_more_lat_admg(graph):
-
-    """
-
-    Creates acyclic directed mixed graph (ADMG) from networkx graph with latent variables.
-    
-    """
-
-    ## Define obs vs latent nodes
-    all_nodes = ["IL6", "STAT3", "M2", "MYC", "C1", "C2"]
-    obs_nodes = ["IL6", "STAT3", "M2", "MYC"]
-            
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
-
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    mapping = dict(zip(list(graph.nodes), 
-                      [Variable(i) for i in list(graph.nodes)]))
-    graph = nx.relabel_nodes(graph, mapping)
-    
-    ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
-    
-    return y0_graph
-
-## Simulations -----------------------------------------------------------------
-# Two node
-sr_graph = build_sr_network()
-y0_sr_graph = build_sr_admg(sr_graph)
-sr_coef = {'IL6': {'intercept': 6, "error": 1},
-            'MYC': {'intercept': 2, "error": .25, 'IL6': 1.}}
-
-two_node_result = benchmark_comparison(sr_graph, y0_sr_graph, sr_coef)
-with open('two_node_result.pickle', 'wb') as handle:
-    pickle.dump(two_node_result, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-# 3 node
-med_graph = build_tf_med_network()
-y0_med_graph = build_med_admg(med_graph)
-med_coef = {'IL6': {'intercept': 6, "error": 1.},
-            'STAT3': {'intercept': 1.6, "error": .25,  'IL6': 0.5},
-              'MYC': {'intercept': 2, "error": .25, 'STAT3': 1.}
-              }
-
-three_node_result = benchmark_comparison(med_graph, y0_med_graph, med_coef)
-with open('three_node_result.pickle', 'wb') as handle:
-    pickle.dump(three_node_result, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-# 3 node with latent
-med_lat_graph = build_tf_med_lat_network()
-y0_med_lat_graph = build_med_lat_admg(med_lat_graph)
-med_lat_coef = {'IL6': {'intercept': 6, "error": 1.},
-            'C1': {'intercept': 0, "error": 1.},
-            'STAT3': {'intercept': 1.6, "error": .25, 'IL6': 0.5, 'C1': .35},
-            'MYC': {'intercept': 2, "error": .25, 'STAT3': 1., 'C1': .35}
-              }
-
-three_node_lat_result = benchmark_comparison(med_lat_graph, 
-                                             y0_med_lat_graph, 
-                                             med_lat_coef)
-with open('three_node_lat_result.pickle', 'wb') as handle:
-    pickle.dump(three_node_lat_result, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-# 3 node with more latent
-med_more_lat_graph = build_tf_med_more_lat_network()
-y0_more_med_lat_graph = build_med_more_lat_admg(med_more_lat_graph)
-med_more_lat_coef = {'IL6': {'intercept': 6, "error": 1.},
-            'C1': {'intercept': 0, "error": 1.},
-            'C2': {'intercept': 0, "error": 1.},
-            'STAT3': {'intercept': 1.6, "error": .25, 'IL6': 0.5, 'C1': .35},
-            'M2': {'intercept': 1.6, "error": .25, 'STAT3': 0.5, 'C2': .6},
-            'MYC': {'intercept': 2, "error": .25, 'M2': 1., 'C1': .35, 'C2':.6}
-              }
-
-three_node_more_lat_result = benchmark_comparison(med_more_lat_graph,
-                                                  y0_more_med_lat_graph, 
-                                                  med_more_lat_coef)
-with open('three_node_more_lat_result.pickle', 'wb') as handle:
-    pickle.dump(three_node_more_lat_result, handle, 
-                protocol=pickle.HIGHEST_PROTOCOL)
+with open('results.pkl', 'wb') as file:
+    pickle.dump(result, file)
