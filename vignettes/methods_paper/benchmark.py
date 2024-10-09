@@ -243,7 +243,7 @@ outcome = "Erk"
 
 result = list()
 
-for i in range(30):
+for i in range(50):
 
     temp_data = simulate_data(bulk_graph, coefficients=cell_coef, 
                                 mnar_missing_param=[-4, .3], 

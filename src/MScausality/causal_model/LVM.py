@@ -100,18 +100,18 @@ class ProteomicPerturbationModel(PyroModule):
                     with poutine.mask(mask=data[f"missing_{node_name}"].bool()):
                         missing_values = pyro.sample(f"imp_{node_name}", 
                             dist.Normal(
-                                (root_coef_dict_mean[f"{node_name}_int"] - root_coef_dict_scale[f"{node_name}_scale"]), 
+                                (root_coef_dict_mean[f"{node_name}_int"] - \
+                                    (1 - (1 / (1 + torch.exp(-2*(root_coef_dict_mean[f"{node_name}_int"]+.5)))))*root_coef_dict_scale[f"{node_name}_scale"]), 
                                 root_coef_dict_scale[f"{node_name}_scale"]
                                 )
-                            )
-                        
-                        # \- root_coef_dict_mean[f"{node_name}_int"]
+                            )#.detach()
+                        # - .5*root_coef_dict_scale[f"{node_name}_scale"]
 
                     # If data passed in, condition on observed data
                     if f"obs_{node_name}" in data:
 
                         # Add in missing data, detach for pyro gradient
-                        observed = data[f"obs_{node_name}"].detach_()
+                        observed = data[f"obs_{node_name}"].detach()
                         observed[data[f"missing_{node_name}"].bool()
                                  ] = missing_values[
                             data[f"missing_{node_name}"].bool()]
@@ -151,10 +151,12 @@ class ProteomicPerturbationModel(PyroModule):
                 # Impute missing values where needed
                 with poutine.mask(mask=data[f"missing_{node_name}"].bool()):
                     missing_values = pyro.sample(f"imp_{node_name}", 
-                                                 dist.Normal(
-                                                     mean - scale, scale
-                                                     )
-                                                )
+                                                    dist.Normal(
+                                                        mean - \
+                                                        (1 - (1 / (1 + torch.exp(-2*(mean+.5)))))*scale,
+                                                        scale
+                                                        )
+                                                )#.detach()
 
                 if f"obs_{node_name}" in data:
 
@@ -163,11 +165,11 @@ class ProteomicPerturbationModel(PyroModule):
                     observed[data[f"missing_{node_name}"].bool()
                              ] = missing_values[
                                  data[f"missing_{node_name}"].bool()]
-
                     downstream_sample = pyro.sample(
-                            f"{node_name}",
-                            dist.Normal(mean, scale),
-                            obs=observed)
+                                f"{node_name}",
+                                dist.Normal(mean, scale),
+                                obs=observed)
+
                 else:
                     downstream_sample = pyro.sample(
                         f"{node_name}",
@@ -284,20 +286,33 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         data = self.input_data
 
         for col in self.root_nodes:
-            priors[col] = {f"{col}_int": data[col].mean(), 
-                           f"{col}_scale": data[col].std()}
+            if "latent" in col:
+                priors[col] = {f"{col}_int": 0, 
+                                f"{col}_scale": 1}
+            else:
+                priors[col] = {f"{col}_int": data[col].mean(), 
+                                f"{col}_scale": data[col].std()}
 
         for col, value in self.descendent_nodes.items():
-            temp_data = data.copy()
-            temp_data = temp_data.loc[:, value + [col]]
-            temp_data = temp_data.dropna()
-            lm = LinearRegression()
-            lm.fit(temp_data[value], temp_data[col])
-            temp = {}
-            for v in value:
-                temp[f"{col}_{v}_coef"] = lm.coef_[value.index(v)]
-            temp[f"{col}_int"] = lm.intercept_
-            priors[col] = temp
+            if len(value) == 1 and "latent" in value[0]:
+                priors[col] = {f"{col}_int": 0, 
+                               f"{col}_{value[0]}_coef":.5}
+            else:
+                latents = [i for i in value if "latent" in i]
+                value = [i for i in value if "latent" not in i]
+                temp_data = data.copy()
+                temp_data = temp_data.loc[:, value + [col]]
+                temp_data = temp_data.dropna()
+                lm = LinearRegression()
+                lm.fit(temp_data[value], temp_data[col])
+                temp = {}
+                for v in value:
+                    temp[f"{col}_{v}_coef"] = lm.coef_[value.index(v)]
+                for l in latents:
+                    temp[f"{col}_{l}_coef"] = .5
+                temp[f"{col}_int"] = lm.intercept_
+                priors[col] = temp
+
         self.priors = priors
 
     def compile_parameters(self):
@@ -481,13 +496,16 @@ def build_igf_network():
 
     ## Add edges
     graph.add_edge("IL6", "MYC")
+    graph.add_edge("MYC", "STAT3")
+    graph.add_edge("C1", "STAT3")
+    graph.add_edge("C1", "IL6")
     
     return graph
 
 def build_admg(graph):
     ## Define obs vs latent nodes
-    all_nodes = ["IL6","MYC"]
-    obs_nodes = ["IL6","MYC"]
+    all_nodes = ["IL6","MYC", "STAT3", "C1"]
+    obs_nodes = ["IL6","MYC", "STAT3"]
             
     attrs = {node: (True if node not in obs_nodes and 
                     node != "\\n" else False) for node in all_nodes}
@@ -516,8 +534,10 @@ def main():
     # data = (data - data.mean()) / data.std()
 
     ## Coefficients for relations
-    sr_coef = {'IL6': {'intercept': 8, "error": 1},
-            'MYC': {'intercept': -6, "error": .25, 'IL6': 1.}}
+    sr_coef = {'IL6': {'intercept': 8, "error": 1, "C1":.5},
+            'C1': {'intercept': 10, "error": 1},
+            'MYC': {'intercept': -6, "error": .25, 'IL6': 1.},
+            'STAT3': {'intercept': -6, "error": .25, 'IL6': 1., "C1":.4}}
     data = simulate_data(graph,
                          coefficients=sr_coef, 
                          add_feature_var=True, n=20, seed=2)
@@ -530,7 +550,7 @@ def main():
     lvm = LVM(input_data, y0_graph)
     lvm.prepare_graph()
     lvm.prepare_data()
-
+    lvm.get_priors()
     lvm.fit_model(num_steps=100)
     print("snarf")
     # lvm.intervention({"Ras": (torch.tensor(3.))}, "Erk")
