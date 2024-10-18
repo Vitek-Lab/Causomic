@@ -149,7 +149,7 @@ for i in range(N):
                             sim_data=True)
 
     fd_result_data = comparison(
-        fd["Networkx"], fd["y0"], fd["MScausality"],
+        fd["Networkx"], fd["MScausality"], fd["MScausality"],
         fd["Coefficients"], {"X": 0}, {"X": 2}, 
         "Z", fd_summarized_data)
 
@@ -181,6 +181,6 @@ bd_result = pd.concat(bd_result, ignore_index=True)
 
 # Save results
 with open('results.pkl', 'wb') as file:
-    pickle.dump({"Mediator": med_result,    
+    pickle.dump({"Mediator": med_result,
                  "Frontdoor": fd_result,
                  "Backdoor": bd_result}, file)

@@ -109,6 +109,7 @@ def frontdoor(include_coef=True):
     # TODO: replace with automated code
     mscausality_graph = NxMixedGraph()
     mscausality_graph.add_directed_edge("X", "Z")
+    mscausality_graph.add_directed_edge("X", "Y")
     mscausality_graph.add_directed_edge("Y", "Z")
 
     if include_coef:
