@@ -87,6 +87,11 @@ def comparison(bulk_graph,
     lvm.prepare_data()
     lvm.get_priors()
 
+    for i in lvm.priors.keys():
+        for v in lvm.priors[i].keys():
+            if ("coef" in v): 
+                lvm.priors[i][v] = .75
+
     pyro.clear_param_store()
     lvm.fit_model(num_steps=10000)
 
