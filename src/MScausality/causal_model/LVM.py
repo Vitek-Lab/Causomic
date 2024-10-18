@@ -1,5 +1,4 @@
 
-
 from MScausality.simulation.simulation import simulate_data
 from MScausality.data_analysis.dataProcess import dataProcess
 from MScausality.data_analysis.normalization import normalize
@@ -63,7 +62,7 @@ class ProteomicPerturbationModel(PyroModule):
                                           ] = pyro.sample(
                     f"{node_name}_{item}_coef", 
                     dist.Normal(
-                        priors[node_name][f"{node_name}_{item}_coef"], .1)
+                        priors[node_name][f"{node_name}_{item}_coef"], .25)
                     )
 
             downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
@@ -328,14 +327,14 @@ class LVM: ## TODO: rename to LVM? LVSCM?
 
         # Extract coefficients locs
         loc_params = [i for i in params.keys() if ("imp" not in i) & \
-                             ("latent" not in i) & ("locs" in i)]
+                             ("locs" in i)]#("latent" not in i) & 
         loc_coefs = pd.DataFrame().from_dict(
             {key.replace("AutoNormal.locs.", ""): params[key] \
              for key in loc_params}, 
              orient='index', columns=["mean"]).reset_index(names="parameter")
         
         scale_params = [i for i in params.keys() if ("imp" not in i) & \
-                             ("latent" not in i) & ("scales" in i)]
+                             ("scales" in i)]#("latent" not in i) & 
         scale_coefs = pd.DataFrame().from_dict(
             {key.replace("AutoNormal.scales.", ""): params[key] \
              for key in scale_params}, 
