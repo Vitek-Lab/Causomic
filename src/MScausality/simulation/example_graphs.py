@@ -13,7 +13,7 @@ def mediator(include_coef=True):
     graph.add_edge("X", "Y")
     graph.add_edge("Y", "Z")
     
-    attrs = {node: True for node in nodes}
+    attrs = {node: False for node in nodes}
 
     nx.set_node_attributes(graph, attrs, name="hidden")
 
