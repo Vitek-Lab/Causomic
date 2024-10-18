@@ -178,3 +178,9 @@ for i in range(N):
 med_result = pd.concat(med_result, ignore_index=True)
 fd_result = pd.concat(fd_result, ignore_index=True)
 bd_result = pd.concat(bd_result, ignore_index=True)
+
+# Save results
+with open('results.pkl', 'wb') as file:
+    pickle.dump({"Mediator": med_result,
+                 "Frontdoor": fd_result,
+                 "Backdoor": bd_result}, file)
