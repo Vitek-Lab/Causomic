@@ -12,9 +12,12 @@ import pickle
 
 import y0
 from y0.dsl import Variable
-from eliater.regression import summary_statistics, get_adjustment_set
+from eliater.regression import summary_statistics
 
 import pyro
+
+from concurrent.futures import ThreadPoolExecutor
+
 
 def intervention(model, int1, int2, outcome, scale_metrics):
     ## MScausality results
@@ -106,8 +109,36 @@ def comparison(bulk_graph,
     return result_df
 
 
+def generate_med_data(replicates):
+
+    temp_seed = np.random.randint(1000000)
+    med = mediator()
+
+    # Mediator loop
+    data = simulate_data(
+        med["Networkx"], 
+        coefficients=med["Coefficients"], 
+        mnar_missing_param=[20, .3], # No missingness
+        add_feature_var=True, 
+        n=replicates, 
+        seed=temp_seed)
+    
+    summarized_data = dataProcess(
+        data["Feature_data"], 
+        normalization=False, 
+        feature_selection="All",
+        MBimpute=False,
+        sim_data=True)
+    
+    result = comparison(
+        med["Networkx"], med["y0"], med["MScausality"],
+        med["Coefficients"], {"X": 0}, {"X": 2}, 
+        "Z", summarized_data)
+
+    return result
+
 # Initailize graphs
-med = mediator()
+
 fd = frontdoor()
 bd = backdoor()
 
@@ -118,71 +149,12 @@ med_result = list()
 fd_result = list()
 bd_result = list()
 
-for i in range(N):
+with ThreadPoolExecutor() as executor:
+    reps = [250 for _ in range(50)]
 
-    # Mediator loop
-    med_data = simulate_data(med["Networkx"], 
-                              coefficients=med["Coefficients"], 
-                              mnar_missing_param=[20, .3], # No missingness
-                              add_feature_var=True, 
-                              n=250, 
-                              seed=i)
-    med_summarized_data = dataProcess(med_data["Feature_data"], 
-                            normalization=False, 
-                            feature_selection="All",
-                            MBimpute=False,
-                            sim_data=True)
+    dataframes = list(executor.map(generate_med_data, reps))
 
-    med_result_data = comparison(
-        med["Networkx"], med["y0"], med["MScausality"],
-        med["Coefficients"], {"X": 0}, {"X": 2}, 
-        "Z", med_summarized_data)
-
-    med_result.append(med_result_data)
-
-    # Frontdoor loop
-    fd_data = simulate_data(fd["Networkx"], 
-                              coefficients=fd["Coefficients"], 
-                              mnar_missing_param=[20, .3], # No missingness
-                              add_feature_var=True, 
-                              n=250, 
-                              seed=i)
-    fd_summarized_data = dataProcess(fd_data["Feature_data"], 
-                            normalization=False, 
-                            feature_selection="All",
-                            MBimpute=False,
-                            sim_data=True)
-
-    fd_result_data = comparison(
-        fd["Networkx"], fd["MScausality"], fd["MScausality"],
-        fd["Coefficients"], {"X": 0}, {"X": 2}, 
-        "Z", fd_summarized_data)
-
-    fd_result.append(fd_result_data)
-
-    # Backdoor loop
-    bd_data = simulate_data(bd["Networkx"], 
-                              coefficients=bd["Coefficients"], 
-                              mnar_missing_param=[20, .3], # No missingness
-                              add_feature_var=True, 
-                              n=250, 
-                              seed=i)
-    bd_summarized_data = dataProcess(bd_data["Feature_data"], 
-                            normalization=False, 
-                            feature_selection="All",
-                            MBimpute=False,
-                            sim_data=True)
-
-    bd_result_data = comparison(
-        bd["Networkx"], bd["y0"], bd["MScausality"],
-        bd["Coefficients"], {"X": 0}, {"X": 2}, 
-        "Z", bd_summarized_data)
-
-    bd_result.append(bd_result_data)
-
-med_result = pd.concat(med_result, ignore_index=True)
-fd_result = pd.concat(fd_result, ignore_index=True)
-bd_result = pd.concat(bd_result, ignore_index=True)
+med_result = pd.concat(dataframes, ignore_index=True)
 
 # Save results
 with open('results.pkl', 'wb') as file:
