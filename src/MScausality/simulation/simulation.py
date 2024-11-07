@@ -221,7 +221,7 @@ def generate_features(data, node):
     feature_level_data = pd.DataFrame(columns=["Protein", "Replicate", 
                                                "Feature", "Intensity"])
 
-    number_features = np.random.randint(5, 20)
+    number_features = np.random.randint(15, 30)
     feature_effects = [np.random.uniform(-.75, .75) for _ in range(number_features)]
 
     for i in range(len(data)):

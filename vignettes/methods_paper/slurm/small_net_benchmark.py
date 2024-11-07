@@ -57,7 +57,7 @@ def comparison(bulk_graph,
                                     add_feature_var=False, n=10000, seed=2)
 
     gt_ate = (intervention_high["Protein_data"][outcome].mean() \
-          - intervention_low["Protein_data"][outcome].mean() )
+          - intervention_low["Protein_data"][outcome].mean())
     
     # Eliator prediction
     obs_data_eliator = data.copy()
@@ -90,12 +90,11 @@ def comparison(bulk_graph,
     lvm.prepare_data()
     lvm.get_priors()
 
-    for i in lvm.priors.keys():
-        for v in lvm.priors[i].keys():
-            if ("coef" in v): 
-                lvm.priors[i][v] = .75
+    # for i in lvm.priors.keys():
+    #     for v in lvm.priors[i].keys():
+    #         if ("coef" in v): 
+    #             lvm.priors[i][v] = .75
 
-    pyro.clear_param_store()
     lvm.fit_model(num_steps=10000)
 
     full_imp_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
@@ -122,11 +121,13 @@ def generate_med_data(replicates):
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
-    
+    data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+
     summarized_data = dataProcess(
         data["Feature_data"], 
         normalization=False, 
         feature_selection="All",
+        summarization_method="TMP",
         MBimpute=False,
         sim_data=True)
     
@@ -137,27 +138,77 @@ def generate_med_data(replicates):
 
     return result
 
-# Initailize graphs
+def generate_bd_data(replicates):
 
-fd = frontdoor()
+    temp_seed = np.random.randint(1000000)
+    bd = backdoor()
+
+    # Mediator loop
+    data = simulate_data(
+        bd["Networkx"], 
+        coefficients=bd["Coefficients"], 
+        mnar_missing_param=[20, .3], # No missingness
+        add_feature_var=True, 
+        n=replicates, 
+        seed=temp_seed)
+    data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+
+    summarized_data = dataProcess(
+        data["Feature_data"], 
+        normalization=False, 
+        feature_selection="All",
+        summarization_method="TMP",
+        MBimpute=False,
+        sim_data=True)
+    
+    result = comparison(
+        bd["Networkx"], bd["y0"], bd["MScausality"],
+        bd["Coefficients"], {"X": 0}, {"X": 2}, 
+        "Z", summarized_data)
+
+    return result
+
+# Initailize graphs
 bd = backdoor()
 
 # Benchmarks
-N = 2
+N = 30
+rep_range = [10, 20, 50, 100, 250, 500, 1000]
 
 med_result = list()
-fd_result = list()
 bd_result = list()
 
-with ThreadPoolExecutor() as executor:
-    reps = [250 for _ in range(50)]
+# Mediator
+for r in rep_range:
 
-    dataframes = list(executor.map(generate_med_data, reps))
+    temp_rep_list = list()
 
-med_result = pd.concat(dataframes, ignore_index=True)
+    for i in range(N):
+        temp_rep_list.append(generate_med_data(r))
+
+    temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
+    temp_rep_list.loc[:, "Replicates"] = r
+
+    med_result.append(temp_rep_list)
+
+med_result = pd.concat(med_result, ignore_index=True)
+
+# Backdoor
+for r in rep_range:
+
+    temp_rep_list = list()
+
+    for i in range(N):
+        temp_rep_list.append(generate_med_data(r))
+
+    temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
+    temp_rep_list.loc[:, "Replicates"] = r
+
+    bd_result.append(temp_rep_list)
+
+bd_result = pd.concat(bd_result, ignore_index=True)
 
 # Save results
 with open('results.pkl', 'wb') as file:
     pickle.dump({"Mediator": med_result,
-                 "Frontdoor": fd_result,
                  "Backdoor": bd_result}, file)

@@ -201,7 +201,7 @@ def tukey_median_polish(data, eps = 0.01, maxiter=10, trace_iter=True, na_rm=Tru
       ans = {"overall": t, "row": r, "col": c, "residuals": z}
       return ans
 
-def summarize_data(data, MBimpute):
+def summarize_data(data, summarization_method, MBimpute):
     """
     Summarize data by Tukey median polish
     """
@@ -216,53 +216,31 @@ def summarize_data(data, MBimpute):
             protein_data = imputation(protein_data)
 
         protein_data = protein_data.pivot(index='Feature', 
-                                          columns='Run', 
+                                          columns='RUN', 
                                           values='Intensity')
-      #   protein_data = protein_data.fillna(0)
-        protein_data = protein_data.to_numpy()
-        tmp_data = tukey_median_polish(protein_data)
-        tmp_data = tmp_data["overall"] + tmp_data["col"]
+
+        if summarization_method == "TMP":
+            protein_data = protein_data.to_numpy()
+            tmp_data = tukey_median_polish(protein_data)
+            tmp_data = tmp_data["overall"] + tmp_data["col"]
+        elif summarization_method == "median":
+            tmp_data = protein_data.median(axis=0, skipna=True).values
+        elif summarization_method == "mean":
+            tmp_data = protein_data.mean(axis=0, skipna=True).values
         
         summarized_data.loc[:, protein] = tmp_data
     return summarized_data
 
-def dataProcess(data, normalization="equalizeMedians", 
+def dataProcess(data, 
+                normalization="equalizeMedians", 
                 feature_selection="All",
                 n_features=3,
+                summarization_method="TMP",
                 MBimpute=True,
                 sim_data=False):
 
     """
     Implementation of MSstats dataProcess function in Python.
-
-    Currently unavailable. To convert process simulated data first save the feature level data to a csv and then run
-    the following code in R:
-
-    library(MSstats)
-    library(tidyverse)
-
-    data = read.csv("sim_feature_level_data.csv")
-    data = data %>% select(Protein, Feature, Replicate, Obs_Intensity)
-    data = data %>% rename(ProteinName=Protein, PeptideSequence=Feature,
-                           BioReplicate=Replicate, Intensity=Obs_Intensity)
-
-    data$PrecursorCharge = 2
-    data$FragmentIon = NA
-    data$ProductCharge= NA
-    data$IsotopeLabelType = "L"
-    data$Condition = "Obs"
-    data$Run = data$BioReplicate
-    data$Fraction = 1
-    data$PeptideSequence  = paste(data$ProteinName, data$PeptideSequence , sep="_")
-    data$Run = paste(data$Run, data$Condition, sep="_")
-    data$Intensity = 2**data$Intensity
-
-    processed_data = dataProcess(data, normalization=FALSE, MBimpute=TRUE)
-    processed_data$ProteinLevelData %>% select(Protein, originalRUN, LogIntensities) %>% pivot_wider(
-          names_from = Protein,
-          values_from = c(LogIntensities)
-          ) %>%
-          write.csv("protein_data.csv", row.names=FALSE)
 
     :param data:
     :param normalization:
@@ -283,13 +261,15 @@ def dataProcess(data, normalization="equalizeMedians",
             data.loc[:, "FragmentIon"].astype(str) + "_" + \
             data.loc[:, "ProductCharge"].astype(str) + "_"
 
+    data.loc[:, "RUN"] = pd.factorize(data.loc[:, "Run"])[0]
+
     if normalization == "equalizeMedians":
         data = normalize_median(data)
 
     if feature_selection == "TopN":
         data = topn_feature_selection(data, n_features)
 
-    summarized_data = summarize_data(data, MBimpute)
+    summarized_data = summarize_data(data, summarization_method, MBimpute)
 
     return summarized_data
 
@@ -297,7 +277,8 @@ def dataProcess(data, normalization="equalizeMedians",
 def main():
     # Test dataProcess function
     data = pd.read_csv("data/methods_paper_data/tf_sim/simple_regression_feature_data.csv")
-    test = dataProcess(data, feature_selection="TopN", sim_data=True)
+    test = dataProcess(data, feature_selection="TopN", 
+                       summarization_method="median", sim_data=True)
     print(test)
 
     fig, ax = plt.subplots()

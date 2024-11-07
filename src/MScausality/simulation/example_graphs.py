@@ -1,17 +1,29 @@
 
 import networkx as nx
+import numpy as np
+
 from y0.graph import NxMixedGraph
 from y0.dsl import Variable
 from y0.algorithm.simplify_latent import simplify_latent_dag
 
-def mediator(include_coef=True):
+def mediator(include_coef=True, n_med=1):
+
+    if n_med < 1:
+        raise ValueError("n_med must be at least 1")
 
     graph = nx.DiGraph()
-    nodes = ["X", "Y", "Z"]
+    nodes = ["X", "Z"]
+    med_nodes = [f"M{i}" for i in range(1, n_med+1)]
+    nodes = nodes + med_nodes
 
     ## Add edges
-    graph.add_edge("X", "Y")
-    graph.add_edge("Y", "Z")
+    graph.add_edge("X", "M1")
+    
+    for i in range(1, n_med+1):
+        if i < n_med:
+            graph.add_edge(f"M{i}", f"M{i+1}")
+    
+    graph.add_edge(f"M{n_med}", "Z")
     
     attrs = {node: False for node in nodes}
 
@@ -22,15 +34,23 @@ def mediator(include_coef=True):
 
     # TODO: replace with automated code
     mscausality_graph = NxMixedGraph()
-    mscausality_graph.add_directed_edge("X", "Y")
-    mscausality_graph.add_directed_edge("Y", "Z")
+    mscausality_graph.add_directed_edge("X", "M1")
+    
+    for i in range(1, n_med+1):
+        if i < n_med:
+            mscausality_graph.add_directed_edge(f"M{i}", f"M{i+1}")
+    
+    mscausality_graph.add_directed_edge(f"M{n_med}", "Z")
 
     if include_coef:
         coef = {
             "X": {"intercept": 6, "error": 1.},
-            "Y": {"intercept": 1.6, "error": .25, "X": 0.5},
-            "Z": {"intercept": -3, "error": .25, "Y": 1.}
+            "M1": {"intercept": 1.6, "error": .25, "X": 0.5},
+            "Z": {"intercept": -3, "error": .25, f"M{n_med}": 1.}
             }
+        for i in range(2, n_med+1):
+            coef[f"M{i}"] = {"intercept": 1.6, "error": .25, 
+                             f"M{i-1}": np.random.uniform(.5, 1.5)}
     else:
         coef = None
 
@@ -111,7 +131,6 @@ def frontdoor(include_coef=True):
     mscausality_graph.add_directed_edge("X", "Z")
     mscausality_graph.add_directed_edge("X", "Y")
     mscausality_graph.add_directed_edge("Y", "Z")
-    mscausality_graph.add_undirected_edge("Y", "Z")
 
     if include_coef:
         coef = {
@@ -130,12 +149,77 @@ def frontdoor(include_coef=True):
         "Coefficients": coef
         }
 
+def signaling_network(include_coef=True):
+
+    graph = nx.DiGraph()
+
+    ## Add edges
+    graph.add_edge("EGF", "SOS")
+    graph.add_edge("EGF", "PI3K")
+    graph.add_edge("IGF", "SOS")
+    graph.add_edge("IGF", "PI3K")
+    graph.add_edge("SOS", "Ras")
+    graph.add_edge("Ras", "PI3K")
+    graph.add_edge("Ras", "Raf")
+    graph.add_edge("PI3K", "Akt")
+    graph.add_edge("Akt", "Raf")
+    graph.add_edge("Raf", "Mek")
+    graph.add_edge("Mek", "Erk")
+    
+    ## Define obs vs latent nodes
+    all_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
+                 "Mek", "Erk", "EGF", "IGF"]
+    obs_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
+                 "Mek", "Erk"]
+    
+    attrs = {node: (True if node not in obs_nodes and 
+                    node != "\\n" else False) for node in all_nodes}
+    
+    nx.set_node_attributes(graph, attrs, name="hidden")
+    # Use y0 to build ADMG
+    y0_graph = NxMixedGraph()
+    y0_graph = y0_graph.from_latent_variable_dag(graph, "hidden")
+
+
+    mscausality_graph = NxMixedGraph()
+    mscausality_graph.add_directed_edge("SOS", "PI3K")
+    mscausality_graph.add_directed_edge("Ras", "PI3K")
+    mscausality_graph.add_directed_edge("Ras", "Raf")
+    mscausality_graph.add_directed_edge("PI3K", "Akt")
+    mscausality_graph.add_directed_edge("Akt", "Raf")
+    mscausality_graph.add_directed_edge("Raf", "Mek")
+    mscausality_graph.add_directed_edge("Mek", "Erk")
+
+    if include_coef:
+        coef = {
+            'EGF': {'intercept': 10., "error": 1},
+            'IGF': {'intercept': 8., "error": 1},
+            'SOS': {'intercept': -2, "error": .5, 
+                      'EGF': 0.6, 'IGF': 0.6},
+            'Ras': {'intercept': 3, "error": .5, 'SOS': .5},
+            'PI3K': {'intercept': 1.6, "error": .5, 
+                       'EGF': .5, 'IGF': .5, 'Ras': .5},
+            'Akt': {'intercept': 3., "error": .5, 'PI3K': 0.75},
+            'Raf': {'intercept': 8, "error": .5,
+                      'Ras': 0.8, 'Akt': -.4},
+            'Mek': {'intercept': 3., "error": .5, 'Raf': 0.75},
+            'Erk': {'intercept': 0., "error": .5, 'Mek': 1.2}}
+    else:
+        coef = None
+
+    return {
+        "Networkx": graph,
+        "y0": y0_graph,
+        "MScausality": mscausality_graph,
+        "Coefficients": coef
+        }
 
 def main():
 
-    med = mediator()
+    med = mediator(n_med=3)
     bd = backdoor()
     fd = frontdoor()
+    sn = signaling_network()
 
 if __name__ == "__main__":
     main()
