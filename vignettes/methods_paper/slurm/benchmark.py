@@ -86,10 +86,10 @@ def comparison(bulk_graph,
     lvm.prepare_data()
     lvm.get_priors()
 
-    # for i in lvm.priors.keys():
-    #     for v in lvm.priors[i].keys():
-    #         if ("coef" in v): 
-    #             lvm.priors[i][v] = .75
+    for i in lvm.priors.keys():
+        for v in lvm.priors[i].keys():
+            if ("coef" in v): 
+                lvm.priors[i][v] = .75
 
     lvm.fit_model(num_steps=10000)
 
@@ -155,5 +155,5 @@ for r in rep_range:
 igf_result = pd.concat(igf_result, ignore_index=True)
 
 # Save results
-with open('igf_uniform_priors.pkl', 'wb') as file:
+with open('igf_informed_priors.pkl', 'wb') as file:
     pickle.dump(igf_result, file)
