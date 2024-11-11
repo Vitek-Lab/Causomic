@@ -56,7 +56,7 @@ class ProteomicPerturbationModel(PyroModule):
             #         priors[node_name][f"{node_name}_int"], 1.)
             #         )
             downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(0,5)
+                f"{node_name}_int", dist.Uniform(-5,5)
                     )
             
             for item in items:
@@ -70,7 +70,7 @@ class ProteomicPerturbationModel(PyroModule):
                 downstream_coef_dict_mean[f"{node_name}_{item}_coef"
                                           ] = pyro.sample(
                     f"{node_name}_{item}_coef", 
-                    dist.Normal(0,5)
+                    dist.Uniform(-5,5)
                     )
 
             # downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
@@ -84,7 +84,7 @@ class ProteomicPerturbationModel(PyroModule):
             #         priors[node_name][f"{node_name}_int"], 1.)
             #         )
             root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(0,5)
+                f"{node_name}_int", dist.Uniform(-5,5)
                     )
             
             # root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(

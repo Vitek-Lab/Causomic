@@ -155,5 +155,5 @@ for r in rep_range:
 igf_result = pd.concat(igf_result, ignore_index=True)
 
 # Save results
-with open('igf_wide_normal_priors.pkl', 'wb') as file:
+with open('igf_uniform_priors.pkl', 'wb') as file:
     pickle.dump(igf_result, file)
