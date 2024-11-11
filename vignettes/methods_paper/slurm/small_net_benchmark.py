@@ -108,9 +108,8 @@ def comparison(bulk_graph,
     return result_df
 
 
-def generate_med_data(replicates):
+def generate_med_data(replicates, temp_seed):
 
-    temp_seed = np.random.randint(1000000)
     med = mediator()
 
     # Mediator loop
@@ -138,9 +137,8 @@ def generate_med_data(replicates):
 
     return result
 
-def generate_bd_data(replicates):
+def generate_bd_data(replicates, temp_seed):
 
-    temp_seed = np.random.randint(1000000)
     bd = backdoor()
 
     # Mediator loop
@@ -184,7 +182,7 @@ for r in rep_range:
     temp_rep_list = list()
 
     for i in range(N):
-        temp_rep_list.append(generate_med_data(r))
+        temp_rep_list.append(generate_med_data(r, i))
 
     temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
     temp_rep_list.loc[:, "Replicates"] = r
@@ -199,7 +197,7 @@ for r in rep_range:
     temp_rep_list = list()
 
     for i in range(N):
-        temp_rep_list.append(generate_med_data(r))
+        temp_rep_list.append(generate_med_data(r, i))
 
     temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
     temp_rep_list.loc[:, "Replicates"] = r
@@ -209,6 +207,6 @@ for r in rep_range:
 bd_result = pd.concat(bd_result, ignore_index=True)
 
 # Save results
-with open('results.pkl', 'wb') as file:
+with open('results_tight_normal_priors.pkl', 'wb') as file:
     pickle.dump({"Mediator": med_result,
                  "Backdoor": bd_result}, file)

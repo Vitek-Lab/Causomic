@@ -51,27 +51,27 @@ class ProteomicPerturbationModel(PyroModule):
         # Initial priors for coefficients
         for node_name, items in self.downstream_nodes.items():
 
-            # downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-            #     f"{node_name}_int", dist.Normal(
-            #         priors[node_name][f"{node_name}_int"], 1.)
-            #         )
             downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(0,5)
+                f"{node_name}_int", dist.Normal(
+                    priors[node_name][f"{node_name}_int"], 1.)
                     )
+            # downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
+            #     f"{node_name}_int", dist.Normal(0,5)
+            #         )
             
             for item in items:
 
-                # downstream_coef_dict_mean[f"{node_name}_{item}_coef"
-                #                           ] = pyro.sample(
-                #     f"{node_name}_{item}_coef", 
-                #     dist.Normal(
-                #         priors[node_name][f"{node_name}_{item}_coef"], .5)
-                #     )
                 downstream_coef_dict_mean[f"{node_name}_{item}_coef"
                                           ] = pyro.sample(
                     f"{node_name}_{item}_coef", 
-                    dist.Normal(0,5)
+                    dist.Normal(
+                        priors[node_name][f"{node_name}_{item}_coef"], .5)
                     )
+                # downstream_coef_dict_mean[f"{node_name}_{item}_coef"
+                #                           ] = pyro.sample(
+                #     f"{node_name}_{item}_coef", 
+                #     dist.Normal(0,5)
+                #     )
 
             # downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
             #     f"{node_name}_scale", dist.Exponential(2.))
@@ -79,13 +79,13 @@ class ProteomicPerturbationModel(PyroModule):
                 f"{node_name}_scale", dist.Exponential(1))
 
         for node_name in self.root_nodes:
-            # root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-            #     f"{node_name}_int", dist.Normal(
-            #         priors[node_name][f"{node_name}_int"], 1.)
-            #         )
             root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(0,5)
+                f"{node_name}_int", dist.Normal(
+                    priors[node_name][f"{node_name}_int"], 1.)
                     )
+            # root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
+            #     f"{node_name}_int", dist.Normal(0,5)
+            #         )
             
             # root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
             #     f"{node_name}_scale", 
