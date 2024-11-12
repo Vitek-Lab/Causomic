@@ -88,7 +88,7 @@ def comparison(bulk_graph,
 
     for i in lvm.priors.keys():
         for v in lvm.priors[i].keys():
-            if ("coef" in v): 
+            if ("coef" in v) & (v != "Raf_Akt_coef"): 
                 lvm.priors[i][v] = .75
 
     lvm.fit_model(num_steps=10000)
