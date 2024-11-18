@@ -2,247 +2,89 @@
 from MScausality.simulation.simulation import simulate_data
 from MScausality.data_analysis.dataProcess import dataProcess
 from MScausality.data_analysis.normalization import normalize
-
-import os
+from MScausality.causal_model.models import ProteomicPerturbationModel, ProteomicPerturbationCATE
+from MScausality.causal_model.models import NumpyroProteomicPerturbationModel
+from MScausality.causal_model.utils import prep_data_for_model
 
 import pandas as pd
 import numpy as np
-
-import pyro
-import pyro.distributions as dist
-from pyro.infer.autoguide import AutoNormal, AutoDelta, AutoMultivariateNormal, init_to_mean
-from pyro.infer import SVI, Trace_ELBO
-from pyro.nn import PyroModule
-import pyro.poutine as poutine
-
-from sklearn.linear_model import LinearRegression
+from operator import attrgetter
 
 import torch
+import pyro
+from pyro import poutine
+from pyro.infer.autoguide import AutoDelta, AutoMultivariateNormal, AutoGuideList, AutoNormal
+from pyro.infer import SVI, Trace_ELBO
+
+import numpyro
+from numpyro.infer import MCMC, NUTS
+from numpyro.infer import Predictive
+from jax import random
+
+from sklearn.linear_model import LinearRegression
+import statsmodels.api as sm
 
 import networkx as nx
 import y0
 from y0.dsl import Variable
 from y0.algorithm.simplify_latent import simplify_latent_dag
 
-from chirho.interventional.handlers import do
-from chirho.counterfactual.handlers import MultiWorldCounterfactual
+numpyro.set_platform('cpu')
+numpyro.set_host_device_count(4)
 
 # TODO: give user the option to reset parameters or not (new models vs more training)
 # pyro.clear_param_store()
 # pyro.settings.set(module_local_params=True)
 
-class ProteomicPerturbationModel(PyroModule):
-
-    def __init__(self, n_obs, root_nodes, downstream_nodes):
+class LVM:
+    def __init__(self, backend="numpyro", 
+                 num_samples=1000, 
+                 warmup_steps=1000, 
+                 num_chains=4,
+                 num_steps=2000, 
+                 initial_lr=.01, gamma=.01,
+                 patience=300, min_delta=5,
+                 informative_priors=None):
         
-        super().__init__()
-        self.n_obs = n_obs
-        self.root_nodes = root_nodes
-        self.downstream_nodes = downstream_nodes
+        self.backend = backend
+        self.num_samples = num_samples
+        self.warmup_steps = warmup_steps
+        self.num_chains = num_chains
+        self.num_steps = num_steps
+        self.initial_lr = initial_lr
+        self.gamma = gamma
+        self.patience = patience
+        self.min_delta = min_delta
+        self.informative_priors = informative_priors
 
-    def forward(self, data, priors):
+    def __repr__(self):
+        return f"Latent Variable Structural Causal Model"
+    
+    def __str__(self):
+        return f"Latent Variable Structural Causal Model"
+    
+    def __len__(self):
+        return len(self.obs_data)
 
-        # Define objects that will store the coefficients
-        downstream_coef_dict_mean = dict()
-        downstream_coef_dict_scale = dict()
-        root_coef_dict_mean = dict()
-        root_coef_dict_scale = dict()
+    def parse_graph(self):
 
-        # Initial priors for coefficients
-        for node_name, items in self.downstream_nodes.items():
+        """
+        Parse graph into root nodes and descendent nodes.
 
-            downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(
-                    priors[node_name][f"{node_name}_int"], 1.)
-                    )
-            # downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-            #     f"{node_name}_int", dist.Uniform(-5,5)
-            #         )
-            
-            for item in items:
-
-                downstream_coef_dict_mean[f"{node_name}_{item}_coef"
-                                          ] = pyro.sample(
-                    f"{node_name}_{item}_coef", 
-                    dist.Normal(
-                        priors[node_name][f"{node_name}_{item}_coef"], .5)
-                    )
-                # downstream_coef_dict_mean[f"{node_name}_{item}_coef"
-                #                           ] = pyro.sample(
-                #     f"{node_name}_{item}_coef", 
-                #     dist.Uniform(-5,5)
-                #     )
-
-            # downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-            #     f"{node_name}_scale", dist.Exponential(2.))
-            downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-                f"{node_name}_scale", dist.Exponential(1))
-
-        for node_name in self.root_nodes:
-            root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-                f"{node_name}_int", dist.Normal(
-                    priors[node_name][f"{node_name}_int"], 1.)
-                    )
-            # root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
-            #     f"{node_name}_int", dist.Uniform(-5,5)
-            #         )
-            
-            # root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-            #     f"{node_name}_scale", 
-            #     dist.Exponential(2)
-            #     )
-            root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-                f"{node_name}_scale", 
-                dist.Exponential(1)
-                )
-
-        # Loop through the data
-        downstream_distributions = dict()
-
-        with pyro.plate("observations", self.n_obs):
-            
-            # Start with root nodes (sampled from normal)
-            for node_name in self.root_nodes:
-            
-                # latent nodes 
-                # TODO: Determine if these should be removed
-                # if "latent" in node_name:
-                #     root_sample = pyro.sample(f"{node_name}", dist.Normal(
-                #         root_coef_dict_scale[f"{node_name}_scale"],
-                #         root_coef_dict_scale[f"{node_name}_scale"])
-                #         )
-                # else:
-
-                # # Impute missing values where needed
-                # with poutine.mask(mask=data[f"missing_{node_name}"].bool()):
-                #     missing_values = pyro.sample(f"imp_{node_name}", 
-                #         dist.Normal(
-                #             (root_coef_dict_mean[f"{node_name}_int"] - \
-                #                 (1 - (1 / (1 + torch.exp(-2*(root_coef_dict_mean[f"{node_name}_int"]+.5)))))*root_coef_dict_scale[f"{node_name}_scale"]), 
-                #             root_coef_dict_scale[f"{node_name}_scale"]
-                #             )
-                #         )#.detach()
-                #     # - .5*root_coef_dict_scale[f"{node_name}_scale"]
-
-                # # If data passed in, condition on observed data
-                if f"obs_{node_name}" in data:
-
-                #     # Add in missing data, detach for pyro gradient
-                #     observed = data[f"obs_{node_name}"].detach()
-                #     observed[data[f"missing_{node_name}"].bool()
-                #              ] = missing_values[
-                #         data[f"missing_{node_name}"].bool()]
-                    
-                #     root_sample = pyro.sample(
-                #         f"{node_name}",
-                #         dist.Normal(
-                #             root_coef_dict_mean[f"{node_name}_int"], 
-                #             root_coef_dict_scale[f"{node_name}_scale"]
-                #             ),
-                #         obs=observed
-                #         )
-                    root_sample = pyro.sample(
-                        f"{node_name}",
-                        dist.Normal(
-                            root_coef_dict_mean[f"{node_name}_int"], 
-                            root_coef_dict_scale[f"{node_name}_scale"]
-                            ),
-                        obs=data[f"obs_{node_name}"]
-                    )
-                # If not data passed in, just sample
-                else:
-                    root_sample = pyro.sample(
-                        f"{node_name}",
-                        dist.Normal(
-                            root_coef_dict_mean[f"{node_name}_int"], 
-                            root_coef_dict_scale[f"{node_name}_scale"]
-                            )
-                        )
-
-                downstream_distributions[node_name] = root_sample
-
-            # Linear regression for each downstream node
-            for node_name, items in self.downstream_nodes.items():
-
-                # calculate mean as sum of upstream nodes and coefficients
-                mean = downstream_coef_dict_mean[f"{node_name}_int"]
-                for item in items:
-                    coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-                    mean = mean + coef*downstream_distributions[item]
-
-                # Define scale
-                scale = downstream_coef_dict_scale[f"{node_name}_scale"]
-
-                # # Impute missing values where needed
-                # with poutine.mask(mask=data[f"missing_{node_name}"].bool()):
-                #     missing_values = pyro.sample(f"imp_{node_name}", 
-                #                                     dist.Normal(
-                #                                         mean - \
-                #                                         (1 - (1 / (1 + torch.exp(-2*(mean+.5)))))*scale,
-                #                                         scale
-                #                                         )
-                #                                 )#.detach()
-
-                if f"obs_{node_name}" in data:
-
-                #     # Add in missing data, detach for pyro gradient
-                #     observed = data[f"obs_{node_name}"].detach_()
-                #     observed[data[f"missing_{node_name}"].bool()
-                #              ] = missing_values[
-                #                  data[f"missing_{node_name}"].bool()]
-                #     downstream_sample = pyro.sample(
-                #                 f"{node_name}",
-                #                 dist.Normal(mean, scale),
-                #                 obs=observed)
-                    downstream_sample = pyro.sample(
-                                f"{node_name}",
-                                dist.Normal(mean, scale),
-                                obs=data[f"obs_{node_name}"])
-                
-                else:
-                    downstream_sample = pyro.sample(
-                        f"{node_name}",
-                        dist.Normal(mean, scale))
-
-                downstream_distributions[node_name] = downstream_sample
-
-        return downstream_distributions
-
-# class ConditionedProteomicModel(PyroModule):
-#     def __init__(self, model: ProteomicPerturbationModel):
-#         super().__init__()
-#         self.model = model
-
-#     def forward(self, condition_data):#**kwargs
-#         # with condition(data=condition_data):
-#         return self.model(data=condition_data)
-
-class ProteomicPerturbationCATE(pyro.nn.PyroModule):
-    def __init__(self, model: ProteomicPerturbationModel):
-        super().__init__()
-        self.model = model
-
-    def forward(self, intervention, condition_data, priors):#, obs_data, missing, root_nodes, downstream_nodes, intervention, intervention_node
-
-        # with do(actions={intervention_node: (torch.tensor(intervention).float())}):#, \
-            # condition(data=condition_data):#, MultiWorldCounterfactual(), 
-        with do(actions=intervention):
-            return self.model(data=condition_data, priors=priors)
-        # with MultiWorldCounterfactual(), do(actions=intervention):
-        #     return self.model(data=condition_data)
-        
-class LVM: ## TODO: rename to LVM? LVSCM?
-    def __init__(self, observational_data, causal_graph):
-        self.obs_data = observational_data
-        self.causal_graph = causal_graph
-
-    def prepare_graph(self):
+        Returns
+        -------
+        root_nodes : list
+            A list of root nodes in the causal graph.
+        descendent_nodes : dict
+            A dictionary containing the descendent nodes for each root node.
+        """
 
         # Sort graph
         sorted_nodes = [i for i in self.causal_graph.topological_sort()]
 
         # Get ancestors of each node
-        ancestors = {i: list(self.causal_graph.ancestors_inclusive(i)) for i in sorted_nodes}
+        ancestors = {i: list(self.causal_graph.ancestors_inclusive(i)) \
+                     for i in sorted_nodes}
 
         # Find starting nodes
         root_nodes = [i for i in sorted_nodes if len(ancestors[i]) == 1]
@@ -250,8 +92,10 @@ class LVM: ## TODO: rename to LVM? LVSCM?
 
         temp_descendent_nodes = dict()
         for i in descendent_nodes:
-            in_edges = self.causal_graph.directed.in_edges(i)
-            temp_descendent_nodes[i] = [i[0] for i in list(self.causal_graph.directed.in_edges(i))]
+            temp_descendent_nodes[i] = [
+                i[0] for i in list(self.causal_graph.directed.in_edges(i))
+                ]
+            
         descendent_nodes = temp_descendent_nodes
 
         # Find latent confounder nodes
@@ -272,79 +116,72 @@ class LVM: ## TODO: rename to LVM? LVSCM?
                     descendent_nodes[node].append(latent_nodes[i])
 
         # Finalize output
-        descendent_nodes = {str(name): [str(item) for item in nodes if item != name] for name, nodes in
-                            descendent_nodes.items() if name in descendent_nodes}
+        descendent_nodes = {
+            str(name): 
+            [str(item) for item in nodes if item != name] for name, nodes in 
+            descendent_nodes.items() if name in descendent_nodes
+            }
         root_nodes = [str(i) for i in root_nodes]
 
         self.root_nodes = root_nodes
         self.descendent_nodes = descendent_nodes
 
-    def prepare_data(self):
+    def parse_data(self):
 
         data = dict()
         missing = dict()
         for i in self.obs_data.columns:
-            data[i] = torch.tensor(self.obs_data[i].values).float()
-            missing[i] = torch.tensor(self.obs_data[i].isna().values).float()
-            # data[i][self.obs_data[i].isna()] = 0.
+            if self.backend == "numpyro":
+                data[i] = np.array(self.obs_data[i].values)
+                missing[i] = np.array(self.obs_data[i].isna().values)
+            elif self.backend == "pyro":
+                data[i] = torch.tensor(self.obs_data[i].values).float()
+                missing[i] = torch.tensor(self.obs_data[i].isna().values).float()
         
         self.input_data = pd.DataFrame.from_dict(data)
         self.input_missing = pd.DataFrame.from_dict(missing)
-    
-    def prep_condition_data(self):
-        condition_data = dict()
-        for node in self.root_nodes:
-            if "latent" not in node:
-                condition_data[f"obs_{node}"] = torch.tensor(
-                    self.input_data.loc[:, node].values)
-                condition_data[f"missing_{node}"] = torch.tensor(
-                    self.input_missing.loc[:, node].values)
 
-        for node in self.descendent_nodes:
-            condition_data[f"obs_{node}"] = torch.tensor(
-                self.input_data.loc[:, node].values)
-            condition_data[f"missing_{node}"] = torch.tensor(
-                self.input_missing.loc[:, node].values)
-
-        return condition_data
-    
-    def get_priors(self):
+    def parse_priors(self):
         
         priors = {}
 
-        data = self.input_data
+        if self.informative_priors is None:
+            inf_priors = list()
+        else:
+            inf_priors = list(self.informative_priors.keys())
 
+        # TODO: determine correct scale for uninformative priors
         for col in self.root_nodes:
-            if "latent" in col:
-                priors[col] = {f"{col}_int": 0, 
-                                f"{col}_scale": 1}
+            if col in inf_priors:
+                priors[col] = {
+                    f"{col}_int": self.informative_priors[col]["int"],
+                    f"{col}_scale": self.informative_priors[col]["scale"]}
             else:
-                priors[col] = {f"{col}_int": data[col].mean(), 
-                                f"{col}_scale": data[col].std()}
+                priors[col] = {f"{col}_int": 0,
+                               f"{col}_scale": 5}
 
         for col, value in self.descendent_nodes.items():
-            if len(value) == 1 and "latent" in value[0]:
-                priors[col] = {f"{col}_int": 0, 
-                               f"{col}_{value[0]}_coef":.5}
+            
+            temp = {}
+            if col in inf_priors:
+                for v in value: 
+                    temp[f"{col}_{v}_coef"
+                         ] = self.informative_priors[col][f"{v}_coef"]
+                    temp[f"{col}_{v}_scale"
+                         ] = self.informative_priors[col][f"{v}_scale"]
             else:
-                latents = [i for i in value if "latent" in i]
-                value = [i for i in value if "latent" not in i]
-                temp_data = data.copy()
-                temp_data = temp_data.loc[:, value + [col]]
-                temp_data = temp_data.dropna()
-                lm = LinearRegression()
-                lm.fit(temp_data[value], temp_data[col])
-                temp = {}
                 for v in value:
-                    temp[f"{col}_{v}_coef"] = lm.coef_[value.index(v)]
-                for l in latents:
-                    temp[f"{col}_{l}_coef"] = .5
-                temp[f"{col}_int"] = lm.intercept_
-                priors[col] = temp
+                    temp[f"{col}_{v}_coef"] = 0
+                    temp[f"{col}_{v}_scale"] = 5
+            
+            temp[f"{col}_int"] = 0
+            temp[f"{col}_scale"] = 5
+            priors[col] = temp
 
         self.priors = priors
 
-    def compile_parameters(self):
+    # TODO: Fix this for AutoDelta
+    def compile_pyro_parameters(self):
         
         """
         Takes the learned pyro parameters and compiles them into readable format.
@@ -355,92 +192,123 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         params = {key : value.detach() for key, value in params.items()}
         self.original_params = params
 
-        # Extract coefficients locs
-        loc_params = [i for i in params.keys() if ("imp" not in i) & \
-                             ("locs" in i)]#("latent" not in i) & 
-        loc_coefs = pd.DataFrame().from_dict(
-            {key.replace("AutoNormal.locs.", ""): params[key] \
+        loc_params = [i for i in params.keys() if ("imp" not in i)] #& \
+                             #("locs" in i)]#("latent" not in i) & 
+        coef_data = pd.DataFrame().from_dict(
+            {key.replace("AutoDelta.", ""): params[key] \
              for key in loc_params}, 
              orient='index', columns=["mean"]).reset_index(names="parameter")
-        
-        scale_params = [i for i in params.keys() if ("imp" not in i) & \
-                             ("scales" in i)]#("latent" not in i) & 
-        scale_coefs = pd.DataFrame().from_dict(
-            {key.replace("AutoNormal.scales.", ""): params[key] \
-             for key in scale_params}, 
-             orient='index', columns=["scale"]).reset_index(names="parameter")
-        
-        coef_data = pd.merge(loc_coefs, scale_coefs, on="parameter")
+
         coef_data["mean"] = [i.numpy() for  i in coef_data["mean"]]
-        coef_data["scale"] = [i.numpy() for  i in coef_data["scale"]]
 
-        self.parameters = coef_data
+    def compile_numpyro_parameters(self, prob=.9):
 
-    def add_imputed(self):
         """
-        Adds imputed values back into data with mean and scale.
+        Custom function to compile summary statistics from numpyro model.
+
+        :param model: trained mcmc model
+        :param prob: the probability mass of samples within the HPDI interval.
+
+        :return: dictionary of summary statistics.
         """
+
+        sites = self.model._states[self.model._sample_field]
+
+        if isinstance(sites, dict):
+            state_sample_field = attrgetter(
+                self.model._sample_field)(self.model._last_state)
+            if isinstance(state_sample_field, dict):
+                sites = {
+                    k: v
+                    for k, v in self.model._states[
+                        self.model._sample_field].items()
+                    if k in state_sample_field
+                }
+
+        for site_name in list(sites):
+            if len(sites[site_name].shape) == 3:
+                if sites[site_name].shape[2] == 0:
+                    # remove key from dictionary
+                    sites.pop(site_name)
+
+        summary_stats = numpyro.diagnostics.summary(sites, 
+                                                    prob, 
+                                                    group_by_chain=True)
+
+        sample_keys = list(self.model.get_samples().keys())
+        samples = self.model.get_samples()
+        learned_params = dict()
+
+        for i in range(len(sample_keys)):
+            if "scale" not in sample_keys[i] and "imp" not in sample_keys[i]:
+                learned_params[
+                    f"{sample_keys[i]}_mean_param"] = samples[
+                        sample_keys[i]].mean()
+                learned_params[
+                    f"{sample_keys[i]}_scale_param"] = self.model.get_samples()[
+                        sample_keys[i]].std()
+            elif "scale" in sample_keys[i]:
+                learned_params[
+                    f"{sample_keys[i]}_param"] = samples[sample_keys[i]].mean()
+            else:
+                learned_params[
+                    f"{sample_keys[i]}"] = samples[sample_keys[i]].mean(axis=0)
+                learned_params[
+                    f"{sample_keys[i]}_scale"] = samples[
+                        sample_keys[i]].std(axis=0)
+
+        self.learned_params = learned_params
+        self.summary_stats = summary_stats
+
+    def train_numpyro(self, verbose=True):
         
-        # Put data into long format
-        long_data = pd.melt(self.input_data, var_name="protein", 
-                            value_name="intensity")
-        long_data.loc[long_data["intensity"] == 0, "intensity"] = np.nan
-        long_data.loc[:, "imp_mean"] = np.nan
-        long_data.loc[:, "imp_scale"] = np.nan
-
-        # Extract imputation info from model parameters
-        # TODO: (?) Put this into a function to stop code repeat
-        loc_params = [i for i in self.original_params.keys() if ("imp" in i) & \
-                      ("locs" in i)]
-        loc_imp = pd.DataFrame().from_dict(
-            {key.replace("AutoNormal.locs.imp_", ""): self.original_params[key] \
-             for key in loc_params})
-        loc_imp = loc_imp[self.input_missing.astype(bool)]
-        loc_imp = pd.melt(loc_imp, var_name="protein", 
-                            value_name="imp_loc")
-        loc_imp = loc_imp.dropna(ignore_index=True)
-                
-        scale_params = [i for i in self.original_params.keys() if ("imp" in i) & \
-                      ("scales" in i)]
-        scale_imp = pd.DataFrame().from_dict(
-            {key.replace("AutoNormal.scales.imp_", ""): self.original_params[key] \
-             for key in scale_params})
-        scale_imp = scale_imp[self.input_missing.astype(bool)]
-        scale_imp = pd.melt(scale_imp, var_name="protein", 
-                            value_name="imp_scale")
-        scale_imp = scale_imp.dropna(ignore_index=True)
-
-        for col in loc_imp["protein"].unique():
-
-            long_data.loc[(long_data["protein"] == col) & \
-                        (long_data["intensity"].isna()), "imp_mean"] = \
-                            loc_imp.loc[loc_imp["protein"] == col, 
-                                        "imp_loc"].values
+        condition_data = dict()
+        condition_missing = dict()
+        
+        for node in self.root_nodes:
+            condition_data[f"{node}"] = np.array(
+                np.nan_to_num(self.input_data.loc[:, node].values))
+            condition_missing[f"{node}"] = np.array(
+                self.input_missing.loc[:, node].values)
             
-            long_data.loc[(long_data["protein"] == col) & \
-                        (long_data["intensity"].isna()), "imp_scale"] = \
-                            scale_imp.loc[scale_imp["protein"] == col, 
-                                        "imp_scale"].values
-        
-        self.imputed_data = long_data
-        
+        for node in self.descendent_nodes:
+            condition_data[f"{node}"] = np.array(
+                np.nan_to_num(self.input_data.loc[:, node].values))
+            condition_missing[f"{node}"] = np.array(
+                self.input_missing.loc[:, node].values)
+    
+        model = MCMC(NUTS(NumpyroProteomicPerturbationModel), 
+                    num_warmup=self.warmup_steps, 
+                    num_samples=self.num_samples, 
+                    num_chains=self.num_chains)
+        model.run(random.PRNGKey(0), 
+                 condition_data, 
+                 condition_missing,
+                 self.priors,
+                 self.root_nodes, 
+                 self.descendent_nodes)
+        self.model = model
 
-    def fit_model(self, num_steps=2000, 
-                  initial_lr=.03, gamma=.01,
-                  patience=500, min_delta=5, 
-                  verbose=True):
+
+    def train_pyro(self, verbose=True):
         
         pyro.set_rng_seed(1234)
 
-        #ConditionedProteomicModel(
         model = ProteomicPerturbationModel(n_obs = len(self.input_data), 
                                        root_nodes = self.root_nodes, 
                                        downstream_nodes = self.descendent_nodes)
-        condition_data = self.prep_condition_data()
+        # dpc_slope = calc_dpc(self.input_data)
+        # self.dpc_slope = dpc_slope
+        condition_data = prep_data_for_model(self.root_nodes, 
+                                             self.descendent_nodes,
+                                             self.input_data,
+                                             self.input_missing)
         
+
         # set up the optimizer
-        lrd = gamma ** (1 / num_steps)
-        optim = pyro.optim.ClippedAdam({'lr': initial_lr, 'lrd': lrd})
+        lrd = self.gamma ** (1 / self.num_steps)
+        optim = pyro.optim.ClippedAdam({'lr': self.initial_lr, 
+                                        'lrd': lrd})
 
         guide = AutoDelta(model)
 
@@ -451,160 +319,230 @@ class LVM: ## TODO: rename to LVM? LVSCM?
         best_loss = float('inf')
         steps_since_improvement = 0
 
-        for step in range(num_steps):
+        for step in range(self.num_steps):
             loss = svi.step(condition_data, self.priors)
             if step % 100 == 0 & verbose:
                 print(f"Step {step}: Loss = {loss}")
 
             # Check for improvement
-            if loss < best_loss - min_delta:
+            if loss < best_loss - self.min_delta:
                 best_loss = loss
                 steps_since_improvement = 0
             else:
                 steps_since_improvement += 1
 
             # Early stopping condition
-            if steps_since_improvement >= patience:
+            if steps_since_improvement >= self.patience:
                 print(f"Stopping early at step {step} with loss {loss}")
                 break
 
         self.model = model
         self.guide = guide
 
-        self.compile_parameters()
-        self.add_imputed()
+    def add_imputed_values(self):
+        """
+        Adds imputed values back into data with mean and scale.
+        """
+        
+        # Put data into long format
+        long_data = pd.melt(self.input_data, var_name="protein", 
+                            value_name="intensity")
+        long_data.loc[long_data["intensity"] == 0, "intensity"] = np.nan
+        long_data['was_missing'] = long_data['intensity'].isna()
+        long_data.loc[:, "imp_mean"] = np.nan
+        
+        if self.backend == "pyro":
+
+            # TODO: (?) Put this into a function to stop code repeat
+            loc_params = [i for i in self.original_params.keys() if ("imp" in i)]
+            loc_imp = pd.DataFrame().from_dict(
+                {key.replace("AutoDelta.imp_", ""): self.original_params[key] \
+                for key in loc_params})
+            loc_imp = loc_imp[self.input_missing.astype(bool)]
+            loc_imp = pd.melt(loc_imp, var_name="protein", 
+                                value_name="imp_loc")
+            loc_imp = loc_imp.dropna(ignore_index=True)
+
+            for col in loc_imp["protein"].unique():
+
+                long_data.loc[(long_data["protein"] == col) & \
+                            (long_data["intensity"].isna()), "imp_mean"] = \
+                                loc_imp.loc[loc_imp["protein"] == col, 
+                                            "imp_loc"].values
+                
+            self.imputed_data = long_data
+        
+        elif self.backend == "numpyro":
+
+            # Extract imputation info from model parameters
+            loc_params = [i for i in self.learned_params.keys() if ("imp" in i)]
+            loc_params = {key.replace("imp_", ""): self.learned_params[key] \
+                    for key in loc_params}
+
+            for variable, values in loc_params.items():
+                mask = (long_data['protein'] == variable) & long_data['was_missing']
+                if sum(mask) > 0:
+                    na_indices = long_data[mask].index  # Get the indices for missing values in each variable
+                    fill_len = min(len(values), len(na_indices))  # Determine how many values to use
+                    long_data.loc[na_indices[:fill_len], 'imp_mean'] = values[:fill_len]
+
+            self.imputed_data = long_data
+
+    def fit(self, 
+            observational_data, 
+            causal_graph, 
+            verbose=True):
+        
+        self.obs_data = observational_data
+        self.causal_graph = causal_graph
+        
+        # Prepare information for model
+        self.parse_graph()
+        self.parse_data()
+        self.parse_priors()
+
+        # Train model and extract results
+        if self.backend == "numpyro":
+            self.train_numpyro(verbose=verbose)
+        elif self.backend == "pyro":
+            self.train_pyro(verbose=verbose)
+
+        if self.backend == "numpyro":
+            self.compile_numpyro_parameters()
+        elif self.backend == "pyro":
+            self.compile_pyro_parameters()
+        self.add_imputed_values()
 
     def intervention(self, intervention, outcome_node, compare_value=0.):
         
         # Prep interventional conditioning data
-        condition_data_test = dict()
-        for node in self.root_nodes:
-            if "latent" not in node:
+        if self.backend == "pyro":
+            condition_data_test = dict()
+            for node in self.root_nodes:
+                if "latent" not in node:
+                    condition_data_test[f"missing_{node}"] = torch.tensor(
+                        [0 for _ in range(len(self.input_data))])
+
+            for node in self.descendent_nodes:
                 condition_data_test[f"missing_{node}"] = torch.tensor(
                     [0 for _ in range(len(self.input_data))])
-                # condition_data_test[f"obs_{node}"] = torch.tensor(
-                #     [0. for _ in range(len(self.input_data))])
 
-        for node in self.descendent_nodes:
-            condition_data_test[f"missing_{node}"] = torch.tensor(
-                [0 for _ in range(len(self.input_data))])
-            # condition_data_test[f"obs_{node}"] = torch.tensor(
-            #     [0. for _ in range(len(self.input_data))])
-
-        # Posterior samples
-        ate_model = ProteomicPerturbationCATE(
-            ProteomicPerturbationModel(n_obs = len(self.input_data),
-                                       root_nodes = self.root_nodes, 
-                                       downstream_nodes = self.descendent_nodes
-                                       ))
-        
-        ate_predictive = pyro.infer.Predictive(
-            ate_model, guide=self.guide, num_samples=500)
-        zero_int = dict()
-        for key, value in intervention.items():
-            zero_int[key] = torch.tensor(compare_value).float()
-            intervention[key] = torch.tensor(value).float()
-
-        zero_int = ate_predictive(zero_int, 
-                                  condition_data_test,
-                                  self.priors)
-        intervention = ate_predictive(intervention, 
-                                      condition_data_test,
-                                      self.priors)
-
-        self.posterior_samples = zero_int[outcome_node].flatten()
-        self.intervention_samples = intervention[outcome_node].flatten()
-
-# Some functions for testing
-def build_igf_network():
-    """
-    Create IGF graph in networkx
-    
-    cell_confounder : bool
-        Whether to add in cell type as a confounder
-    """
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("IL6", "MYC")
-    graph.add_edge("MYC", "STAT3")
-    graph.add_edge("C1", "STAT3")
-    graph.add_edge("C1", "IL6")
-    
-    return graph
-
-def build_admg(graph):
-    ## Define obs vs latent nodes
-    all_nodes = ["IL6","MYC", "STAT3", "C1"]
-    obs_nodes = ["IL6","MYC", "STAT3"]
+            # Posterior samples
+            ate_model = ProteomicPerturbationCATE(
+                ProteomicPerturbationModel(n_obs = len(self.input_data),
+                                        root_nodes = self.root_nodes, 
+                                        downstream_nodes = self.descendent_nodes
+                                        ))
             
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
+            ate_predictive = pyro.infer.Predictive(
+                ate_model, guide=self.guide, num_samples=500)
+            zero_int = dict()
+            for key, value in intervention.items():
+                zero_int[key] = torch.tensor(compare_value).float()
+                intervention[key] = torch.tensor(value).float()
 
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    mapping = dict(zip(list(graph.nodes), 
-                      [Variable(i) for i in list(graph.nodes)]))
-    graph = nx.relabel_nodes(graph, mapping)
-    
-    ## Use y0 to build ADMG
-    simplified_graph = simplify_latent_dag(graph.copy(), tag="hidden")
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(simplified_graph.graph, "hidden")
-    
-    return y0_graph
+            zero_int = ate_predictive(zero_int, 
+                                    condition_data_test,
+                                    self.priors)
+            intervention = ate_predictive(intervention, 
+                                        condition_data_test,
+                                        self.priors)
+
+            self.posterior_samples = zero_int[outcome_node].flatten()
+            self.intervention_samples = intervention[outcome_node].flatten()
+        
+        elif self.backend == "numpyro":
+            rng_key, rng_key_ = random.split(random.PRNGKey(2))
+
+            zero_model = numpyro.handlers.do(
+                NumpyroProteomicPerturbationModel, 
+                data={next(iter(intervention)): compare_value})
+            zero_predictive = Predictive(zero_model, self.model.get_samples())
+            zero_predictions = zero_predictive(rng_key_, None, [],
+                                               self.priors,
+                                               self.root_nodes,
+                                               self.descendent_nodes)
+
+            int_model = numpyro.handlers.do(
+                NumpyroProteomicPerturbationModel, 
+                data=intervention)
+            int_predictive = Predictive(int_model, self.model.get_samples())
+            int_predictions = int_predictive(rng_key_, None, [],
+                                             self.priors,
+                                             self.root_nodes,
+                                             self.descendent_nodes)
+            
+            zero_predictions = zero_predictions[outcome_node]
+            int_predictions = int_predictions[outcome_node]
+            
+            self.posterior_samples = zero_predictions
+            self.intervention_samples = int_predictions
 
 def main():
 
     from MScausality.simulation.example_graphs import mediator
 
-    med = mediator(n_med=4)
-    data = simulate_data(
-        med["Networkx"], 
-        coefficients=med["Coefficients"], 
-        mnar_missing_param=[20, .3], # No missingness
-        add_feature_var=True, 
-        n=1000,
-        seed=10)
+    med = mediator(add_independent_nodes=False, n_ind=50)
+    simulated_med_data = simulate_data(med['Networkx'], 
+                                    coefficients=med['Coefficients'], 
+                                    mnar_missing_param=[-3, .4],
+                                    add_feature_var=True, n=50, seed=2)
+    med_data = dataProcess(simulated_med_data["Feature_data"], normalization=False, 
+                summarization_method="TMP", MBimpute=False, sim_data=True)
+    # med_data = med_data.dropna(how="any",axis=0).reset_index(drop=True)
 
-    summarized_data = dataProcess(
-        data["Feature_data"], 
-        normalization=False, 
-        feature_selection="All",
-        MBimpute=False,
-        sim_data=True)
 
-    transformed_data = normalize(summarized_data, wide_format=True)
+    transformed_data = normalize(med_data, wide_format=True)
     input_data = transformed_data["df"]
     scale_metrics = transformed_data["adj_metrics"]
 
-    lvm = LVM(input_data, med["MScausality"])
-    lvm.prepare_graph()
-    lvm.prepare_data()
-    lvm.get_priors()
-    lvm.fit_model(num_steps=10000)
-    print("snarf")
-    # lvm.intervention({"Ras": (torch.tensor(3.))}, "Erk")
+    lvm = LVM(backend="numpyro")
+    lvm.fit(input_data, med["MScausality"])
+    lvm.intervention({"X": (0 - scale_metrics["mean"]) / scale_metrics["std"]}, "Z")
+    print("finished")
 
-    # int1 = lvm.posterior_samples
-    # int2 = lvm.intervention_samples
-    # plot_data = lvm.imputed_data[lvm.imputed_data["protein"].isin(["Raf", "Mek"])]
-    # pivot wide
-    # raf_data = plot_data[plot_data["protein"] == "Raf"]
-    # mek_data = plot_data[plot_data["protein"] == "Mek"]
+    # imp_data = lvm.imputed_data
+    # X_data = imp_data.loc[imp_data["protein"] == "X"]
+    # Y_data = imp_data.loc[imp_data["protein"] == "M1"]
+    # Z_data = imp_data.loc[imp_data["protein"] == "Z"]
+
+    # X_backdoor_color = np.where(
+    #     (X_data['imp_mean'].isna().values & Y_data['imp_mean'].isna().values), 
+    #     "blue", 
+    #     np.where((X_data['intensity'].isna().values & Y_data['intensity'].isna().values), 
+    #             "red", "orange"))
+
+    # Y_backdoor_color = np.where(
+    #     (Y_data['imp_mean'].isna().values & Z_data['imp_mean'].isna().values), 
+    #     "blue", 
+    #     np.where((Y_data['intensity'].isna().values & Z_data['intensity'].isna().values), 
+    #             "red", "orange"))
 
     # import matplotlib.pyplot as plt
-    # fig, ax = plt.subplots()
 
-    # ax.scatter(raf_data["intensity"], mek_data["intensity"], alpha=.5)
-    # ax.scatter(raf_data["imp_mean"], mek_data["intensity"], alpha=.5, color="orange")
-    # ax.scatter(raf_data["intensity"], mek_data["imp_mean"], alpha=.5, color="orange")
-    # ax.scatter(raf_data["imp_mean"], mek_data["imp_mean"], alpha=.5, color="red")
+    # X_data = np.where(
+    #     X_data['imp_mean'].isna(),
+    #     X_data['intensity'], 
+    #     X_data['imp_mean'])
 
-    # ax.hist(int1, bins=20, alpha=.5, label="Pre-training", density=True)
-    # ax.hist(int2, bins=20, alpha=.5, label="pred", density=True)
+    # Y_data = np.where(
+    #     Y_data['imp_mean'].isna(),
+    #     Y_data['intensity'], 
+    #     Y_data['imp_mean'])
 
+    # Z_data = np.where(
+    #     Z_data['imp_mean'].isna(),
+    #     Z_data['intensity'], 
+    #     Z_data['imp_mean'])
+
+
+    # fig, ax = plt.subplots(2,2, figsize=(10,5))
+
+    # ax[0,0].scatter(input_data.loc[:, "X"], input_data.loc[:, "M1"])
+    # ax[0,1].scatter(X_data, Y_data, color=X_backdoor_color)
+
+    # ax[1,0].scatter(input_data.loc[:, "M1"], input_data.loc[:, "Z"])
+    # ax[1,1].scatter(Y_data, Z_data, color=Y_backdoor_color)
     # plt.show()
 
 if __name__ == "__main__":

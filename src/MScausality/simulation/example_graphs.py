@@ -6,15 +6,20 @@ from y0.graph import NxMixedGraph
 from y0.dsl import Variable
 from y0.algorithm.simplify_latent import simplify_latent_dag
 
-def mediator(include_coef=True, n_med=1):
+def mediator(include_coef=True, 
+             n_med=1, 
+             add_independent_nodes=False, 
+             n_ind=10):
 
     if n_med < 1:
         raise ValueError("n_med must be at least 1")
 
     graph = nx.DiGraph()
+    
     nodes = ["X", "Z"]
-    med_nodes = [f"M{i}" for i in range(1, n_med+1)]
-    nodes = nodes + med_nodes
+    nodes = nodes + [f"M{i}" for i in range(1, n_med+1)]
+    if add_independent_nodes:
+        nodes = nodes + [f"I{i}" for i in range(1, n_ind+1)]
 
     ## Add edges
     graph.add_edge("X", "M1")
@@ -25,6 +30,10 @@ def mediator(include_coef=True, n_med=1):
     
     graph.add_edge(f"M{n_med}", "Z")
     
+    if add_independent_nodes:
+        for i in range(1, n_ind+1):
+            graph.add_node(f"I{i}")
+
     attrs = {node: False for node in nodes}
 
     nx.set_node_attributes(graph, attrs, name="hidden")
@@ -44,13 +53,19 @@ def mediator(include_coef=True, n_med=1):
 
     if include_coef:
         coef = {
-            "X": {"intercept": 6, "error": 1.},
+            "X": {"intercept": 3, "error": 1.},
             "M1": {"intercept": 1.6, "error": .25, "X": 0.5},
-            "Z": {"intercept": -3, "error": .25, f"M{n_med}": 1.}
+            "Z": {"intercept": -1, "error": .25, f"M{n_med}": 1.}
             }
+        
         for i in range(2, n_med+1):
             coef[f"M{i}"] = {"intercept": 1.6, "error": .25, 
                              f"M{i-1}": np.random.uniform(.5, 1.5)}
+        
+        if add_independent_nodes:
+            for i in range(1, n_ind+1):
+                coef[f"I{i}"] = {"intercept": np.random.uniform(-5, 5), 
+                                 "error": 1.}
     else:
         coef = None
 

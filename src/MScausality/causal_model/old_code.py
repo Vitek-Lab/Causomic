@@ -13,6 +13,8 @@ import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 from numpyro.distributions import constraints
 from numpyro import handlers
+from numpyro.infer import MCMC, NUTS
+from numpyro.infer import Predictive
 
 from operator import attrgetter
 from y0.dsl import Variable
@@ -25,10 +27,8 @@ import jax
 from jax import numpy as jnp
 from jax import random
 
-numpyro.set_platform('cpu')
-numpyro.set_host_device_count(4)
 
-def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
+def scm_model(data, root_nodes, downstream_nodes, missing, sample=False): #TODO: add priors and missing
 
     root_coef_dict_mean = dict()
     root_coef_dict_scale = dict()
@@ -38,18 +38,18 @@ def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
 
     for node_name in root_nodes:
 
-        root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean", dist.Normal(10., 5.))
-        root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale", dist.Exponential(.2))
+        root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean", dist.Normal(0., 5.))
+        root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale", dist.Exponential(.1))
 
     for node_name, items in downstream_nodes.items():
 
         downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
-                                                                          dist.Normal(0., 10.))
+                                                                          dist.Normal(0., 5.))
 
         for item in items:
 
             downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
-                                                                                dist.Normal(0., 2.))
+                                                                                dist.Normal(0., 5.))
 
         downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
                                                                        dist.Exponential(1.))
@@ -60,129 +60,74 @@ def scm_model(data, root_nodes, downstream_nodes, missing, learned_params=None):
 
     # Create Pyro Normal distributions for each node
     for node_name in root_nodes:
+        if not sample:
+            # Create a Normal distribution object
+            if "latent" in node_name:
+                root_sample = numpyro.sample(f"{node_name}",
+                            dist.Normal(root_coef_dict_mean[node_name],
+                                        root_coef_dict_scale[node_name]
+                                        ).expand(
+                                [data[list(data.keys())[0]].shape[0]])
+                )
+            else:
 
-        # Create a Normal distribution object
-        if "latent" in node_name:
-            root_sample = numpyro.sample(f"{node_name}",
-                         dist.Normal(root_coef_dict_mean[node_name],
-                                     root_coef_dict_scale[node_name]
-                                     ).expand(
-                             [data[list(data.keys())[0]].shape[0]])
-            )
+                imp = numpyro.sample(
+                    f"imp_{node_name}", dist.Normal(
+                        root_coef_dict_mean[node_name],
+                        root_coef_dict_scale[node_name]).expand(
+                        [sum(missing[node_name] == 1)]
+                    ).mask(False)
+                )
+
+                observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
+
+                root_sample = numpyro.sample(f"{node_name}",
+                                        dist.Normal(root_coef_dict_mean[node_name],
+                                                    root_coef_dict_scale[node_name]
+                                                    ).expand([data[list(data.keys())[0]].shape[0]]),
+                                        obs=observed)
         else:
+            root_sample = numpyro.sample(f"{node_name}",
+                                    dist.Normal(root_coef_dict_mean[node_name],
+                                                root_coef_dict_scale[node_name]
+                                                ))
+            
+        # Store the distribution in the dictionary
+        downstream_distributions[node_name] = root_sample
+
+    # Create pyro linear regression obj for each downstream node
+    for node_name, items in downstream_nodes.items():
+
+        # calculate mean as sum of upstream items
+        mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
+        for item in items:
+            coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
+            mean = mean + coef*downstream_distributions[item]
+
+        # Define scale
+        scale = downstream_coef_dict_scale[f"{node_name}_scale"]
+
+        if not sample:
 
             imp = numpyro.sample(
                 f"imp_{node_name}", dist.Normal(
-                    root_coef_dict_mean[node_name],
-                    root_coef_dict_scale[node_name]).expand(
-                    [sum(missing[node_name] == 1)]
-                ).mask(False)
+                    mean[missing[node_name] == 1],
+                    scale).mask(False)
             )
 
             observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
 
-            root_sample = numpyro.sample(f"{node_name}",
-                                      dist.Normal(root_coef_dict_mean[node_name],
-                                                  root_coef_dict_scale[node_name]
-                                                  ).expand([data[list(data.keys())[0]].shape[0]]),
-                                      obs=observed)
-
-        # Store the distribution in the dictionary
-        downstream_distributions[node_name] = root_sample
-
-    # Create pyro linear regression obj for each downstream node
-    for node_name, items in downstream_nodes.items():
-
-        # calculate mean as sum of upstream items
-        mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-        for item in items:
-            coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-            mean = mean + coef*downstream_distributions[item]
-
-        # Define scale
-        scale = downstream_coef_dict_scale[f"{node_name}_scale"]
-
-        imp = numpyro.sample(
-            f"imp_{node_name}", dist.Normal(
-                mean[missing[node_name] == 1],
-                scale).mask(False)
-        )
-
-        observed = jnp.asarray(data[node_name]).at[missing[node_name] == 1].set(imp)
-
-        # Create a Normal distribution object
-        downstream_sample = numpyro.sample(f"{node_name}",
-                                        dist.Normal(mean, scale),
-                                        obs=observed)
-
+            # Create a Normal distribution object
+            downstream_sample = numpyro.sample(f"{node_name}",
+                                            dist.Normal(mean, scale),
+                                            obs=observed)
+        else:
+            downstream_sample = numpyro.sample(f"{node_name}",
+                                            dist.Normal(mean, scale))
+            
         # Store the distribution in the dictionary
         downstream_distributions[node_name] = downstream_sample
 
-    return downstream_distributions
-
-def int_model(data, root_nodes, downstream_nodes, missing, learned_params=None): #TODO: add priors and missing
-
-    root_coef_dict_mean = dict()
-    root_coef_dict_scale = dict()
-
-    downstream_coef_dict_mean = dict()
-    downstream_coef_dict_scale = dict()
-
-    # with handlers.seed(rng_seed=np.random.randint(-100000, 100000)):
-    for node_name in root_nodes:
-        root_coef_dict_mean[node_name] = numpyro.sample(f"{node_name}_mean",
-                                                        dist.Normal(learned_params[f"{node_name}_mean_mean_param"],
-                                                                    learned_params[f"{node_name}_mean_scale_param"]))
-
-        root_coef_dict_scale[node_name] = numpyro.sample(f"{node_name}_scale",
-                                                         dist.Exponential(learned_params[f"{node_name}_scale_param"]))
-
-    for node_name, items in downstream_nodes.items():
-
-        downstream_coef_dict_mean[f"{node_name}_intercept"] = numpyro.sample(f"{node_name}_intercept",
-                                                                             dist.Normal(
-                                                              learned_params[f"{node_name}_intercept_mean_param"],
-                                                              learned_params[f"{node_name}_intercept_scale_param"]))
-
-        for item in items:
-
-            downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = numpyro.sample(f"{node_name}_{item}_coef",
-                                                                                   dist.Normal(
-                                                               learned_params[f"{node_name}_{item}_coef_mean_param"],
-                                                               learned_params[f"{node_name}_{item}_coef_scale_param"]))
-
-
-        downstream_coef_dict_scale[f"{node_name}_scale"] = numpyro.sample(f"{node_name}_scale",
-                                                       dist.Exponential(learned_params[f"{node_name}_scale_param"]))
-
-    downstream_distributions = dict()
-    for node_name in root_nodes:
-
-        root_sample = numpyro.sample(f"{node_name}",
-                                  dist.Normal(root_coef_dict_mean[node_name],
-                                              root_coef_dict_scale[node_name]))
-
-        # Store the distribution in the dictionary
-        downstream_distributions[node_name] = root_sample
-
-    # Create pyro linear regression obj for each downstream node
-    for node_name, items in downstream_nodes.items():
-
-        # calculate mean as sum of upstream items
-        mean = downstream_coef_dict_mean[f"{node_name}_intercept"]
-        for item in items:
-            coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-            mean = mean + coef*downstream_distributions[item]
-
-        # Define scale
-        scale = downstream_coef_dict_scale[f"{node_name}_scale"]
-
-        # Create a Normal distribution object
-        downstream_sample = numpyro.sample(f"{node_name}",
-                                        dist.Normal(mean, scale))
-
-        # Store the distribution in the dictionary
-        downstream_distributions[node_name] = downstream_sample
     return downstream_distributions
 
 class SCM: ## TODO: rename to LVM? LVSCM?
@@ -297,6 +242,8 @@ class SCM: ## TODO: rename to LVM? LVSCM?
         for i in filled_data.columns:
             data[i] = np.array(filled_data[i].values)
             missing[i] = np.array(filled_data[i].isna().values)
+        self.missing = missing
+        self.data = data
 
         # if algorithm == "MCMC":
         print("Running MCMC...")
@@ -304,30 +251,24 @@ class SCM: ## TODO: rename to LVM? LVSCM?
         mcmc.run(random.PRNGKey(0), data, self.root_nodes, self.descendent_nodes, missing)
         self.compile_model_stats(mcmc)
 
-            # nuts_kernel = NUTS(model=scm_model)
-            # mcmc = MCMC(
-            #     nuts_kernel,
-            #     num_samples=num_samples,
-            #     warmup_steps=warmup_steps,
-            #     num_chains=num_chains)
-            #
-            # mcmc.run(data, self.root_nodes, self.descendent_nodes, missing)
-            #
         self.model = scm_model
-        self.int_model = int_model
         self.mcmc = mcmc
-            #
+
         sample_keys = list(mcmc.get_samples().keys())
         learned_params = dict()
 
         for i in range(len(sample_keys)):
-            if "scale" not in sample_keys[i]:
+            if "scale" not in sample_keys[i] and "imp" not in sample_keys[i]:
                 learned_params[f"{sample_keys[i]}_mean_param"] = mcmc.get_samples()[sample_keys[i]].mean()
                 learned_params[f"{sample_keys[i]}_scale_param"] = mcmc.get_samples()[sample_keys[i]].std()
-            else:
+            elif "scale" in sample_keys[i]:
                 learned_params[f"{sample_keys[i]}_param"] = mcmc.get_samples()[sample_keys[i]].mean()
+            else:
+                learned_params[f"{sample_keys[i]}"] = mcmc.get_samples()[sample_keys[i]].mean(axis=0)
+                learned_params[f"{sample_keys[i]}_scale"] = mcmc.get_samples()[sample_keys[i]].std(axis=0)
 
         self.learned_params = learned_params
+        self.add_imputed_values()
 
         # else:
         #     raise ValueError("Please choose a valid algorithm: MCMC or SVI")
@@ -335,28 +276,57 @@ class SCM: ## TODO: rename to LVM? LVSCM?
     def intervention(self, intervention_node, outcome_node, intervention_value, n=1000,
                      return_all = False):
 
-        # Posterior samples
-        if return_all:
-            post_samples = [numpyro.handlers.seed(self.int_model, np.random.randint(-1*10**10, 1*10**10)
-                                                  )(None, self.root_nodes, self.descendent_nodes,
-                                       [], self.learned_params) for i in range(n)]
+        rng_key, rng_key_ = random.split(random.PRNGKey(2))
 
-            intervened_model = numpyro.handlers.do(self.int_model, data={intervention_node: intervention_value})
-            int_samples = [numpyro.handlers.seed(intervened_model, np.random.randint(-1*10**10, 1*10**10)
-                                                 )(None, self.root_nodes, self.descendent_nodes,
-                                            [], self.learned_params) for i in range(n)]
-        else:
-            post_samples = [numpyro.handlers.seed(self.int_model, np.random.randint(-1*10**10, 1*10**10)
-                                                  )(None, self.root_nodes, self.descendent_nodes,
-                                       [], self.learned_params)[outcome_node] for i in range(n)]
+        zero_model = numpyro.handlers.do(self.model, 
+                                data={intervention_node: 0.})
+        zero_predictive = Predictive(zero_model, self.mcmc.get_samples())
+        zero_predictions = zero_predictive(rng_key_, None, 
+                                           self.root_nodes,
+                                           self.descendent_nodes, 
+                                           [], sample=True)
 
-            intervened_model = numpyro.handlers.do(self.int_model, data={intervention_node: intervention_value})
-            int_samples = [numpyro.handlers.seed(intervened_model, np.random.randint(-1*10**10, 1*10**10)
-                                                 )(None, self.root_nodes, self.descendent_nodes,
-                                            [], self.learned_params)[outcome_node] for i in range(n)]
+        int_model = numpyro.handlers.do(self.model, 
+                                data={intervention_node: intervention_value})
+        int_predictive = Predictive(int_model, self.mcmc.get_samples())
+        int_predictions = int_predictive(rng_key_, None, 
+                                           self.root_nodes,
+                                           self.descendent_nodes, 
+                                           [], sample=True)
+        
+        if not return_all:
+            zero_predictions = zero_predictions[outcome_node]
+            int_predictions = int_predictions[outcome_node]
+        
+        self.posterior_samples = zero_predictions
+        self.intervention_samples = int_predictions
 
-        self.posterior_samples = post_samples
-        self.intervention_samples = int_samples
+    def add_imputed_values(self):
+        """
+        Adds imputed values back into data with mean and scale.
+        """
+        
+        # Put data into long format
+        long_data = pd.melt(self.obs_data, var_name="protein", 
+                            value_name="intensity")
+        long_data.loc[long_data["intensity"] == 0, "intensity"] = np.nan
+        long_data['was_missing'] = long_data['intensity'].isna()
+        long_data.loc[:, "imp_mean"] = np.nan
+
+        # Extract imputation info from model parameters
+        # TODO: (?) Put this into a function to stop code repeat
+        loc_params = [i for i in self.learned_params.keys() if ("imp" in i)]
+        loc_params = {key.replace("imp_", ""): self.learned_params[key] \
+                   for key in loc_params}
+
+        for variable, values in loc_params.items():
+            mask = (long_data['protein'] == variable) & long_data['was_missing']
+            if sum(mask) > 0:
+                na_indices = long_data[mask].index  # Get the indices for missing values in each variable
+                fill_len = min(len(values), len(na_indices))  # Determine how many values to use
+                long_data.loc[na_indices[:fill_len], 'imp_mean'] = values[:fill_len]
+
+        self.imputed_data = long_data
 
 def summary(samples):
     site_stats = {}
@@ -365,41 +335,6 @@ def summary(samples):
         describe = marginal_site.describe(percentiles=[.05, 0.25, 0.5, 0.75, 0.95]).transpose()
         site_stats[site_name] = describe[["mean", "std", "5%", "25%", "50%", "75%", "95%"]]
     return site_stats
-
-def build_igf_network(cell_confounder):
-    """
-    Create IGF graph in networkx
-    
-    cell_confounder : bool
-        Whether to add in cell type as a confounder
-    """
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("A", "B")
-    graph.add_edge("B", "C")
-    graph.add_edge("E", "B")
-    graph.add_edge("E", "A")
-    
-    return graph
-
-def build_admg(graph, cell_confounder=False, cell_latent=False):
-    ## Define obs vs latent nodes
-    all_nodes = ["A", "B", "C", "E"]
-    obs_nodes = ["A", "B", "C"]
-    latent_nodes = ["E"]
-        
-    attrs = {node: (True if node not in obs_nodes and 
-                    node != "\\n" else False) for node in all_nodes}
-
-    nx.set_node_attributes(graph, attrs, name="hidden")
-    
-    ## Use y0 to build ADMG
-    y0_graph = y0.graph.NxMixedGraph()
-    y0_graph = y0_graph.from_latent_variable_dag(graph, "hidden")
-    
-    return y0_graph
-
 
 def main():
 
@@ -416,17 +351,88 @@ def main():
     #             target_name="target_hgnc_symbol")
     # graph.create_latent_graph()
 
-    data = pd.read_csv("data/sim_data/four_node_protein_data.csv")
+    # data = pd.read_csv("data/sim_data/four_node_protein_data.csv")
 
-    graph = build_igf_network(cell_confounder=False)
-    y0_graph = build_admg(graph, cell_confounder=False)
+    # graph = build_igf_network(cell_confounder=False)
+    # y0_graph = build_admg(graph, cell_confounder=False)
 
-    scm = SCM(data.iloc[:, 1:-1], y0_graph)
+    from MScausality.simulation.example_graphs import mediator
+    from MScausality.simulation.simulation import simulate_data
+    from MScausality.data_analysis.dataProcess import dataProcess
+    from MScausality.data_analysis.normalization import normalize
+
+
+    med = mediator(add_independent_nodes=False, n_ind=50)
+    simulated_med_data = simulate_data(med['Networkx'], 
+                                    coefficients=med['Coefficients'], 
+                                    mnar_missing_param=[20, .4],
+                                    add_feature_var=True, n=50, seed=2)
+    med_data = dataProcess(simulated_med_data["Feature_data"], normalization=False, 
+                summarization_method="TMP", MBimpute=False, sim_data=True)
+    
+    transformed_data = normalize(med_data, wide_format=True)
+    input_data = transformed_data["df"]
+    scale_metrics = transformed_data["adj_metrics"]
+
+    scm = SCM(input_data, med['MScausality'])
     scm.prepare_scm_input()
     scm.fit_scm()
-    scm.intervention("MEN1", "TPR", 10.)
+    scm.intervention("X", "Z", 2.)
 
-    print(scm.learned_params)
+    print(np.array(scm.intervention_samples).mean()-np.array(scm.posterior_samples).mean())
+
+    imp_data = scm.imputed_data
+    X_data = imp_data.loc[imp_data["protein"] == "X"]
+    Y_data = imp_data.loc[imp_data["protein"] == "M1"]
+    Z_data = imp_data.loc[imp_data["protein"] == "Z"]
+
+    X_backdoor_color = np.where(
+        (X_data['imp_mean'].isna().values & Y_data['imp_mean'].isna().values), 
+        "blue", 
+        np.where((X_data['intensity'].isna().values & Y_data['intensity'].isna().values), 
+                "red", "orange"))
+
+    Y_backdoor_color = np.where(
+        (Y_data['imp_mean'].isna().values & Z_data['imp_mean'].isna().values), 
+        "blue", 
+        np.where((Y_data['intensity'].isna().values & Z_data['intensity'].isna().values), 
+                "red", "orange"))
+
+    import matplotlib.pyplot as plt
+
+    X_data = np.where(
+        X_data['imp_mean'].isna(),
+        X_data['intensity'], 
+        X_data['imp_mean'])
+
+    Y_data = np.where(
+        Y_data['imp_mean'].isna(),
+        Y_data['intensity'], 
+        Y_data['imp_mean'])
+
+    Z_data = np.where(
+        Z_data['imp_mean'].isna(),
+        Z_data['intensity'], 
+        Z_data['imp_mean'])
+
+
+    fig, ax = plt.subplots(2,2, figsize=(10,5))
+
+    ax[0,0].scatter(input_data.loc[:, "X"], input_data.loc[:, "M1"])
+    ax[0,1].scatter(X_data, Y_data, color=X_backdoor_color)
+
+    ax[1,0].scatter(input_data.loc[:, "M1"], input_data.loc[:, "Z"])
+    ax[1,1].scatter(Y_data, Z_data, color=Y_backdoor_color)
+    plt.show()
+    # ax[0,0].set_xlim(0,2.5)
+    # ax[0,1].set_xlim(0,2.5)
+    # ax[0,0].set_ylim(-.5,.8)
+    # ax[0,1].set_ylim(-.5,.8)
+
+    # ax[1,0].set_xlim(-1,1)
+    # ax[1,1].set_xlim(-1,1)
+    # ax[1,0].set_ylim(-2.5,-.5)
+    # ax[1,1].set_ylim(-2.5,-.5)
 
 if __name__ == "__main__":
     main()
