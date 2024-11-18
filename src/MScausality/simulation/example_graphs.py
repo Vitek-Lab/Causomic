@@ -5,6 +5,9 @@ import numpy as np
 from y0.graph import NxMixedGraph
 from y0.dsl import Variable
 from y0.algorithm.simplify_latent import simplify_latent_dag
+from MScausality.simulation.simulation import simulate_data
+from MScausality.data_analysis.normalization import normalize
+from MScausality.data_analysis.dataProcess import dataProcess
 
 def mediator(include_coef=True, 
              n_med=1, 
@@ -76,11 +79,15 @@ def mediator(include_coef=True,
         "Coefficients": coef
         }
 
-def backdoor(include_coef=True):
+def backdoor(include_coef=True, 
+             add_independent_nodes=False, 
+             n_ind=10):
 
     graph = nx.DiGraph()
     obs_nodes = ["B", "X", "Y", "Z"]
     all_nodes = ["B", "X", "Y", "Z", "C"]
+    if add_independent_nodes:
+        all_nodes = all_nodes + [f"I{i}" for i in range(1, n_ind+1)]
 
     ## Add edges
     graph.add_edge("B", "X")
@@ -88,6 +95,10 @@ def backdoor(include_coef=True):
     graph.add_edge("Y", "Z")
     graph.add_edge("C", "B")
     graph.add_edge("C", "Y")
+    
+    if add_independent_nodes:
+        for i in range(1, n_ind+1):
+            graph.add_node(f"I{i}")
     
     attrs = {node: (True if node not in obs_nodes and 
                     node != "\\n" else False) for node in all_nodes}
@@ -111,6 +122,12 @@ def backdoor(include_coef=True):
             "Y": {"intercept": 1.6, "error": .25, "X": 0.5, "C": .5},
             "Z": {"intercept": -3, "error": .25, "Y": 1.}
             }
+        
+        if add_independent_nodes:
+            for i in range(1, n_ind+1):
+                coef[f"I{i}"] = {"intercept": np.random.uniform(-5, 5), 
+                                 "error": 1.}
+                
     else:
         coef = None
 
@@ -154,6 +171,8 @@ def frontdoor(include_coef=True):
             "Y": {"intercept": 1.6, "error": .25, "X": 0.5},
             "Z": {"intercept": -3, "error": .25, "Y": 1., "C": .5}
             }
+        
+
     else:
         coef = None
 
@@ -164,7 +183,9 @@ def frontdoor(include_coef=True):
         "Coefficients": coef
         }
 
-def signaling_network(include_coef=True):
+def signaling_network(include_coef=True, 
+             add_independent_nodes=False, 
+             n_ind=10):
 
     graph = nx.DiGraph()
 
@@ -180,12 +201,18 @@ def signaling_network(include_coef=True):
     graph.add_edge("Akt", "Raf")
     graph.add_edge("Raf", "Mek")
     graph.add_edge("Mek", "Erk")
+
+    if add_independent_nodes:
+        for i in range(1, n_ind+1):
+            graph.add_node(f"I{i}")
     
     ## Define obs vs latent nodes
     all_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
                  "Mek", "Erk", "EGF", "IGF"]
     obs_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
                  "Mek", "Erk"]
+    if add_independent_nodes:
+        all_nodes = all_nodes + [f"I{i}" for i in range(1, n_ind+1)]
     
     attrs = {node: (True if node not in obs_nodes and 
                     node != "\\n" else False) for node in all_nodes}
@@ -207,18 +234,24 @@ def signaling_network(include_coef=True):
 
     if include_coef:
         coef = {
-            'EGF': {'intercept': 10., "error": 1},
-            'IGF': {'intercept': 8., "error": 1},
-            'SOS': {'intercept': -2, "error": .5, 
+            'EGF': {'intercept': 6., "error": 1},
+            'IGF': {'intercept': 5., "error": 1},
+            'SOS': {'intercept': 2, "error": .5, 
                       'EGF': 0.6, 'IGF': 0.6},
             'Ras': {'intercept': 3, "error": .5, 'SOS': .5},
-            'PI3K': {'intercept': 1.6, "error": .5, 
+            'PI3K': {'intercept': 0, "error": .5, 
                        'EGF': .5, 'IGF': .5, 'Ras': .5},
-            'Akt': {'intercept': 3., "error": .5, 'PI3K': 0.75},
-            'Raf': {'intercept': 8, "error": .5,
+            'Akt': {'intercept': 1., "error": .5, 'PI3K': 0.75},
+            'Raf': {'intercept': 4, "error": .5,
                       'Ras': 0.8, 'Akt': -.4},
-            'Mek': {'intercept': 3., "error": .5, 'Raf': 0.75},
-            'Erk': {'intercept': 0., "error": .5, 'Mek': 1.2}}
+            'Mek': {'intercept': 2., "error": .5, 'Raf': 0.75},
+            'Erk': {'intercept': -2, "error": .5, 'Mek': 1.2}}
+        
+        if add_independent_nodes:
+            for i in range(1, n_ind+1):
+                coef[f"I{i}"] = {"intercept": np.random.uniform(-5, 5), 
+                                 "error": 1.}
+                
     else:
         coef = None
 
@@ -235,6 +268,15 @@ def main():
     bd = backdoor()
     fd = frontdoor()
     sn = signaling_network()
+
+    simulated_fd_data = simulate_data(sn['Networkx'], 
+                                coefficients=sn['Coefficients'], 
+                                mnar_missing_param=[-5, .4],
+                                add_feature_var=True, n=50, seed=2)
+    fd_data = dataProcess(simulated_fd_data["Feature_data"], normalization=False, 
+                summarization_method="TMP", MBimpute=False, sim_data=True)
+    # fd_data = fd_data.dropna(how="all",axis=1)
+    print(fd_data.isna().mean() * 100)
 
 if __name__ == "__main__":
     main()

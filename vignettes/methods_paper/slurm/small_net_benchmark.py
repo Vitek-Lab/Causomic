@@ -107,11 +107,11 @@ def generate_med_data(replicates, temp_seed):
     data = simulate_data(
         med["Networkx"], 
         coefficients=med["Coefficients"], 
-        mnar_missing_param=[20, .3], # No missingness
+        mnar_missing_param=[-3.25, .4],
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
-    data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+    # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
 
     summarized_data = dataProcess(
         data["Feature_data"], 
@@ -136,11 +136,11 @@ def generate_bd_data(replicates, temp_seed):
     data = simulate_data(
         bd["Networkx"], 
         coefficients=bd["Coefficients"], 
-        mnar_missing_param=[20, .3], # No missingness
+        mnar_missing_param=[-4, .4],
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
-    data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+    # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
 
     summarized_data = dataProcess(
         data["Feature_data"], 
@@ -198,6 +198,6 @@ for r in rep_range:
 bd_result = pd.concat(bd_result, ignore_index=True)
 
 # Save results
-# with open('results_tight_normal_priors.pkl', 'wb') as file:
-#     pickle.dump({"Mediator": med_result,
-#                  "Backdoor": bd_result}, file)
+with open('small_network_missing_results.pkl', 'wb') as file:
+    pickle.dump({"Mediator": med_result,
+                 "Backdoor": bd_result}, file)

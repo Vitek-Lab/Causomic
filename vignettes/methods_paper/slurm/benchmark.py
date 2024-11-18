@@ -103,11 +103,11 @@ def generate_sn_data(replicates, temp_seed):
     data = simulate_data(
         sn["Networkx"], 
         coefficients=sn["Coefficients"], 
-        mnar_missing_param=[20, .3], # No missingness
+        mnar_missing_param=[-4, .4],
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
-    data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+    # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
 
     summarized_data = dataProcess(
         data["Feature_data"], 
@@ -117,6 +117,9 @@ def generate_sn_data(replicates, temp_seed):
         MBimpute=False,
         sim_data=True)
     
+    summarized_data = summarized_data.loc[:, [
+        i for i in summarized_data.columns if i not in ["IGF", "EGF"]]]
+
     result = comparison(
         sn["Networkx"], sn["y0"], sn["MScausality"],
         sn["Coefficients"], {"Ras": 5}, {"Ras": 7}, 
@@ -146,5 +149,5 @@ for r in rep_range:
 igf_result = pd.concat(igf_result, ignore_index=True)
 
 # Save results
-with open('igf_informed_priors.pkl', 'wb') as file:
+with open('igf_network_missing_results.pkl', 'wb') as file:
     pickle.dump(igf_result, file)
