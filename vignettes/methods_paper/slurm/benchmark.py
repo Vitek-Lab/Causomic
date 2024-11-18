@@ -14,6 +14,7 @@ from y0.dsl import Variable
 from eliater.regression import summary_statistics
 
 import pyro
+from sklearn.impute import KNNImputer
 
 def intervention(model, int1, int2, outcome, scale_metrics):
     ## MScausality results
@@ -57,6 +58,11 @@ def comparison(bulk_graph,
     
     # Eliator prediction
     obs_data_eliator = data.copy()
+
+    if data.isnull().values.any():
+        imputer = KNNImputer(n_neighbors=3, keep_empty_features=True)
+        # Impute missing values (the result is a NumPy array, so we need to convert it back to a DataFrame)
+        obs_data_eliator = pd.DataFrame(imputer.fit_transform(obs_data_eliator), columns=data.columns)
 
     eliator_int_low = summary_statistics(
         y0_graph_bulk, obs_data_eliator,
@@ -128,7 +134,7 @@ def generate_sn_data(replicates, temp_seed):
     return result
 
 # Benchmarks
-N = 30
+N = 25
 rep_range = [10, 20, 50, 100, 250, 500, 1000]
 
 igf_result = list()

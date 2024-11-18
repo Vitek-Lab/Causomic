@@ -17,6 +17,7 @@ from eliater.regression import summary_statistics
 import pyro
 
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.impute import KNNImputer
 
 
 def intervention(model, int1, int2, outcome, scale_metrics):
@@ -61,6 +62,11 @@ def comparison(bulk_graph,
     
     # Eliator prediction
     obs_data_eliator = data.copy()
+
+    if data.isnull().values.any():
+        imputer = KNNImputer(n_neighbors=3, keep_empty_features=True)
+        # Impute missing values (the result is a NumPy array, so we need to convert it back to a DataFrame)
+        obs_data_eliator = pd.DataFrame(imputer.fit_transform(obs_data_eliator), columns=data.columns)
 
     eliator_int_low = summary_statistics(
         y0_graph_bulk, obs_data_eliator,
@@ -150,6 +156,9 @@ def generate_bd_data(replicates, temp_seed):
         MBimpute=False,
         sim_data=True)
     
+    summarized_data = summarized_data.loc[:, [
+        i for i in summarized_data.columns if i not in ["C"]]]
+    
     result = comparison(
         bd["Networkx"], bd["y0"], bd["MScausality"],
         bd["Coefficients"], {"X": 0}, {"X": 2}, 
@@ -161,7 +170,7 @@ def generate_bd_data(replicates, temp_seed):
 bd = backdoor()
 
 # Benchmarks
-N = 30
+N = 25
 rep_range = [10, 20, 50, 100, 250, 500, 1000]
 
 med_result = list()
