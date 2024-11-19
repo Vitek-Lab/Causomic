@@ -46,7 +46,8 @@ def comparison(bulk_graph,
     
     # Ground truth
     intervention_low = simulate_data(bulk_graph, coefficients=coef,
-                                    intervention=int1, mnar_missing_param=[-4, .3],
+                                    intervention=int1, 
+                                    mnar_missing_param=[-4, .3],
                                     add_feature_var=False, n=10000, seed=2)
 
     intervention_high = simulate_data(bulk_graph, coefficients=coef,
@@ -109,7 +110,7 @@ def generate_sn_data(replicates, temp_seed):
     data = simulate_data(
         sn["Networkx"], 
         coefficients=sn["Coefficients"], 
-        mnar_missing_param=[-4, .4],
+        mnar_missing_param=[-4, .3],
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
@@ -134,8 +135,8 @@ def generate_sn_data(replicates, temp_seed):
     return result
 
 # Benchmarks
-N = 25
-rep_range = [10, 20, 50, 100, 250, 500, 1000]
+N = 15
+rep_range = [10, 20, 50, 100, 250]#, 500, 1000]
 
 igf_result = list()
 
@@ -155,5 +156,5 @@ for r in rep_range:
 igf_result = pd.concat(igf_result, ignore_index=True)
 
 # Save results
-with open('igf_network_missing_results.pkl', 'wb') as file:
+with open('igf_results_with_missing_subset.pkl', 'wb') as file:
     pickle.dump(igf_result, file)

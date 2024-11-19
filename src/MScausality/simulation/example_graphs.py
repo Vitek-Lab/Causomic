@@ -236,16 +236,16 @@ def signaling_network(include_coef=True,
         coef = {
             'EGF': {'intercept': 6., "error": 1},
             'IGF': {'intercept': 5., "error": 1},
-            'SOS': {'intercept': 2, "error": .5, 
+            'SOS': {'intercept': 2, "error": 1, 
                       'EGF': 0.6, 'IGF': 0.6},
-            'Ras': {'intercept': 3, "error": .5, 'SOS': .5},
-            'PI3K': {'intercept': 0, "error": .5, 
+            'Ras': {'intercept': 3, "error": 1, 'SOS': .5},
+            'PI3K': {'intercept': 0, "error": 1, 
                        'EGF': .5, 'IGF': .5, 'Ras': .5},
-            'Akt': {'intercept': 1., "error": .5, 'PI3K': 0.75},
-            'Raf': {'intercept': 4, "error": .5,
+            'Akt': {'intercept': 1., "error": 1, 'PI3K': 0.75},
+            'Raf': {'intercept': 4, "error": 1,
                       'Ras': 0.8, 'Akt': -.4},
-            'Mek': {'intercept': 2., "error": .5, 'Raf': 0.75},
-            'Erk': {'intercept': -2, "error": .5, 'Mek': 1.2}}
+            'Mek': {'intercept': 2., "error": 1, 'Raf': 0.75},
+            'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
         
         if add_independent_nodes:
             for i in range(1, n_ind+1):

@@ -87,43 +87,55 @@ def imputation(data):
     """
     Imputation by linear model
     """
-    # Encoding 'Run' and 'Feature' as numerical values
-    run_dummies = pd.get_dummies(data['Run'])
-    feature_dummies = pd.get_dummies(data['Feature'])
+    if data["Intensity"].isna().mean() != 1:
 
-    model_data = pd.concat([run_dummies, feature_dummies, 
-                            data["Intensity"]], axis=1)
+        keep_runs = data['Intensity'].isna().groupby(
+            data['Run']).mean()[data['Intensity'].isna().groupby(
+            data['Run']).mean() != 1].index.values
 
-    train_data = model_data[model_data['Intensity'].notna()]
-    test_data = model_data[model_data['Intensity'].isna()]
+        keep_feat = data['Intensity'].isna().groupby(
+            data['Feature']).mean()[data['Intensity'].isna().groupby(
+            data['Feature']).mean() != 1].index.values
+        
+        keep_data = data[(data["Run"].isin(keep_runs) & 
+                       data["Feature"].isin(keep_feat))]
+        na_data = data[~(data["Run"].isin(keep_runs) & 
+                       data["Feature"].isin(keep_feat))]
 
-    X_train = train_data[[i for i in train_data.columns if i != 'Intensity']]
-    y_train = train_data['Intensity']
+        # Encoding 'Run' and 'Feature' as numerical values
+        run_dummies = pd.get_dummies(keep_data['Run'])
+        feature_dummies = pd.get_dummies(keep_data['Feature'])
 
-    # Prepare X for testing
-    X_test = test_data[[i for i in test_data.columns if i != 'Intensity']]
+        model_data = pd.concat([run_dummies, feature_dummies, 
+                                keep_data["Intensity"]], axis=1)
 
-    # Fit the model
-    model = LinearRegression()
-    model.fit(X_train, y_train)
+        train_data = model_data[model_data['Intensity'].notna()]
+        test_data = model_data[model_data['Intensity'].isna()]
 
-    # Predict missing values
-    predicted_values = model.predict(X_test)
+        X_train = train_data[[i for i in train_data.columns if i != 'Intensity']]
+        y_train = train_data['Intensity']
 
-    # Fill missing values with the predictions
-    na_summary = data['Intensity'].isna().groupby(
-         data['Run']).sum().values < data.groupby(
-              data['Run'])["ProteinName"].count().values
-    keep_runs = data['Run'].unique()[na_summary]
-    
-    model_data.loc[model_data['Intensity'].isna(), 
-                   'Intensity'] = predicted_values
-    model_data.loc[:, 'Intensity'] = np.where(
-         (data["Run"].isin(keep_runs).values), 
-         model_data.loc[:, 'Intensity'], np.nan)
+        # Prepare X for testing
+        X_test = test_data[[i for i in test_data.columns if i != 'Intensity']]
 
-    data = pd.concat([data[[i for i in data.columns if i != 'Intensity']], 
-                      model_data["Intensity"]], axis=1)
+        # Fit the model
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+
+        # Predict missing values
+        predicted_values = model.predict(X_test)
+
+        # Fill missing values with the predictions
+        model_data.loc[model_data['Intensity'].isna(), 
+                    'Intensity'] = predicted_values
+
+        keep_data = pd.concat([
+             keep_data[[i for i in keep_data.columns if i != 'Intensity']], 
+             model_data["Intensity"]], axis=1)
+        data = pd.concat([keep_data, na_data], ignore_index=True)
+        data.loc[:, "Intensity"] = np.where(data.loc[:, "Intensity"] > 40, 
+                                            np.nan, 
+                                            data.loc[:, "Intensity"])
 
     return data
 
@@ -275,14 +287,23 @@ def dataProcess(data,
 
 
 def main():
+
+    from MScausality.simulation.example_graphs import signaling_network
+    from MScausality.simulation.simulation import simulate_data
+
     # Test dataProcess function
-    data = pd.read_csv("data/methods_paper_data/tf_sim/simple_regression_feature_data.csv")
-    test = dataProcess(data, feature_selection="TopN", 
-                       summarization_method="median", sim_data=True)
-    print(test)
+    fd = signaling_network(add_independent_nodes=False)
+    simulated_fd_data = simulate_data(fd['Networkx'], 
+                                    coefficients=fd['Coefficients'], 
+                                    mnar_missing_param=[-5, .4],
+                                    add_feature_var=True, n=25, seed=3)
+    fd_data = dataProcess(simulated_fd_data["Feature_data"], 
+                          normalization=False, 
+                          summarization_method="TMP", 
+                          MBimpute=True, sim_data=True)
 
     fig, ax = plt.subplots()
-    ax.scatter(test["IL6"], test["MYC"])
+    ax.scatter(fd_data["SOS"], fd_data["Ras"])
     plt.show()
 
 if __name__ == "__main__":

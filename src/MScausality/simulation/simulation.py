@@ -228,7 +228,7 @@ def generate_features(data, node):
         for j in range(number_features):
             
             # Measurement error
-            error = np.random.normal(0, .25)
+            error = np.random.normal(0, .1)
             feature_level_data = pd.concat(
                 [feature_level_data, 
                  pd.DataFrame(
@@ -330,43 +330,17 @@ def build_igf_network(cell_confounder):
 
 def main():
 
-    # pickle_filename = '../../data/IGF_pathway/IGF_DiGraph.pkl'
-    # with open(pickle_filename, 'rb') as pickle_file:
-    #     graph = pickle.load(pickle_file)
+    from MScausality.simulation.simulation import simple_profile_plot
+    from MScausality.simulation.example_graphs import signaling_network
 
-    ## Coefficients for relations
-    # cell_coef = {'EGF': {'intercept': 18., "error": 3},
-    #              'IGF': {'intercept': 17., "error": 3},
-    #              'SOS': {'intercept': -4, "error": 1,
-    #                      'EGF': 0.6, 'IGF': 0.6, },
-    #              'Ras': {'intercept': 5, "error": 1, 'SOS': .5, "cell_type": [3, 0, -3]},
-    #              'PI3K': {'intercept': 1.6, "error": 1,
-    #                       'EGF': .5, 'IGF': 0.5, 'Ras': .5, },
-    #              'Akt': {'intercept': 2., "error": 1, 'PI3K': 0.75, },
-    #              'Raf': {'intercept': 2, "error": 1,
-    #                      'Ras': 0.8, 'Akt': -.4, "cell_type": [-2, 0, 2]},
-    #              'Mek': {'intercept': 3., "error": 1, 'Raf': 0.75, "cell_type": [-2, 0, 2]},
-    #              'Erk': {'intercept': 4., "error": 1, 'Mek': 1.2, "cell_type": [-2, 0, 2]}
-    #              }
+    fd = signaling_network(add_independent_nodes=False)
+    simulated_fd_data = simulate_data(fd['Networkx'], 
+                                    coefficients=fd['Coefficients'], 
+                                    mnar_missing_param=[-3, .3],
+                                    add_feature_var=True, n=25, seed=3)
 
-    # graph = build_igf_network(cell_confounder=True)
-
-    graph = nx.DiGraph()
-
-    ## Add edges
-    graph.add_edge("A", "B")
-    graph.add_edge("B", "C")
-    graph.add_edge("E", "B")
-    graph.add_edge("E", "A")
-
-    sim_data = simulate_data(graph, include_missing=False,
-                             cell_type=False, n_cells=1, n=300, seed=0)
-    
-    pickle_filename = 'data/sim_data/four_node_sim.pkl'
-    with open(pickle_filename, 'wb') as pickle_file:
-        pickle.dump(sim_data, pickle_file)
-
-    sim_data["Feature_data"].to_csv("data/sim_data/four_node_feature_data.csv", index=False)
+    simple_profile_plot(simulated_fd_data["Feature_data"], "Mek")
+    plt.show()
 
 if __name__ == "__main__":
     main()
