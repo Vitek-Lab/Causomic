@@ -133,7 +133,7 @@ def imputation(data):
              keep_data[[i for i in keep_data.columns if i != 'Intensity']], 
              model_data["Intensity"]], axis=1)
         data = pd.concat([keep_data, na_data], ignore_index=True)
-        data.loc[:, "Intensity"] = np.where(data.loc[:, "Intensity"] > 40, 
+        data.loc[:, "Intensity"] = np.where(abs(data.loc[:, "Intensity"]) > 40, 
                                             np.nan, 
                                             data.loc[:, "Intensity"])
 

@@ -151,7 +151,7 @@ informative_prior_coefs = {
 
 # Benchmarks
 prior_studies = 10
-N = 20
+N = 5
 rep_range = [10,20,50,100,250]
 
 prior_list = list()
@@ -177,7 +177,7 @@ for i in range(2000, prior_studies+2000):
         normalization=False, 
         feature_selection="All",
         summarization_method="TMP",
-        MBimpute=False,
+        MBimpute=True,
         sim_data=True)
 
     pyro.clear_param_store()
@@ -224,5 +224,5 @@ return_data = {
 }   
 # print("snarf")
 # Save results
-with open('igf_results_with_informed_prior.pkl', 'wb') as file:
+with open('igf_results_with_informed_prior_small.pkl', 'wb') as file:
     pickle.dump(return_data, file)
