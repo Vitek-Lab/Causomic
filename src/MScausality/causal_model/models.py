@@ -198,10 +198,10 @@ def NumpyroProteomicPerturbationModel(data,
     for node_name in root_nodes:
 
         root_coef_dict_mean[node_name] = numpyro.sample(
-            f"{node_name}_mean", 
+            f"{node_name}_int", 
             numpyro_dist.Normal(
                 priors[node_name][f"{node_name}_int"], 
-                priors[node_name][f"{node_name}_scale"])
+                priors[node_name][f"{node_name}_int_scale"])
                 )
         root_coef_dict_scale[
             node_name] = numpyro.sample(
@@ -216,7 +216,7 @@ def NumpyroProteomicPerturbationModel(data,
                 f"{node_name}_intercept",
                 numpyro_dist.Normal(
                     priors[node_name][f"{node_name}_int"], 
-                    priors[node_name][f"{node_name}_scale"])
+                    priors[node_name][f"{node_name}_int_scale"])
                 )
 
         for item in items:
@@ -226,7 +226,7 @@ def NumpyroProteomicPerturbationModel(data,
                     f"{node_name}_{item}_coef",
                     numpyro_dist.Normal(
                         priors[node_name][f"{node_name}_{item}_coef"], 
-                        priors[node_name][f"{node_name}_{item}_scale"])
+                        priors[node_name][f"{node_name}_{item}_coef_scale"])
                         )
 
         downstream_coef_dict_scale[

@@ -2,8 +2,7 @@ from MScausality.causal_model.LVM import LVM
 from MScausality.simulation.simulation import simulate_data
 from MScausality.data_analysis.normalization import normalize
 from MScausality.data_analysis.dataProcess import dataProcess
-from MScausality.simulation.example_graphs import mediator, frontdoor, backdoor
-
+from MScausality.simulation.example_graphs import signaling_network
 
 import pandas as pd
 import numpy as np
@@ -15,8 +14,6 @@ from y0.dsl import Variable
 from eliater.regression import summary_statistics
 
 import pyro
-
-from concurrent.futures import ThreadPoolExecutor
 from sklearn.impute import KNNImputer
 
 
@@ -46,11 +43,13 @@ def comparison(bulk_graph,
                int1, 
                int2, 
                outcome,
-               data):
+               data,
+               priors):
     
     # Ground truth
     intervention_low = simulate_data(bulk_graph, coefficients=coef,
-                                    intervention=int1, mnar_missing_param=[-4, .3],
+                                    intervention=int1, 
+                                    mnar_missing_param=[-4, .3],
                                     add_feature_var=False, n=10000, seed=2)
 
     intervention_high = simulate_data(bulk_graph, coefficients=coef,
@@ -91,7 +90,7 @@ def comparison(bulk_graph,
     scale_metrics = transformed_data["adj_metrics"]
 
     # Full imp Bayesian model
-    lvm = LVM(backend="numpyro")
+    lvm = LVM(backend="numpyro", informative_priors=priors)
     lvm.fit(input_data, msscausality_graph)
 
     full_imp_model_ate = intervention(lvm, int1, int2, outcome, scale_metrics)
@@ -105,44 +104,15 @@ def comparison(bulk_graph,
     return result_df
 
 
-def generate_med_data(replicates, temp_seed):
+def generate_sn_data(replicates, temp_seed, priors):
 
-    med = mediator()
-
-    # Mediator loop
-    data = simulate_data(
-        med["Networkx"], 
-        coefficients=med["Coefficients"], 
-        mnar_missing_param=[-3.25, .4],
-        add_feature_var=True, 
-        n=replicates, 
-        seed=temp_seed)
-    # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
-
-    summarized_data = dataProcess(
-        data["Feature_data"], 
-        normalization=False, 
-        feature_selection="All",
-        summarization_method="TMP",
-        MBimpute=False,
-        sim_data=True)
-    
-    result = comparison(
-        med["Networkx"], med["y0"], med["MScausality"],
-        med["Coefficients"], {"X": 0}, {"X": 2}, 
-        "Z", summarized_data)
-
-    return result
-
-def generate_bd_data(replicates, temp_seed):
-
-    bd = backdoor()
+    sn = signaling_network()
 
     # Mediator loop
     data = simulate_data(
-        bd["Networkx"], 
-        coefficients=bd["Coefficients"], 
-        mnar_missing_param=[-4, .4],
+        sn["Networkx"], 
+        coefficients=sn["Coefficients"], 
+        mnar_missing_param=[-4, .3],
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
@@ -157,56 +127,108 @@ def generate_bd_data(replicates, temp_seed):
         sim_data=True)
     
     summarized_data = summarized_data.loc[:, [
-        i for i in summarized_data.columns if i not in ["C"]]]
-    
+        i for i in summarized_data.columns if i not in ["IGF", "EGF"]]]
+
     result = comparison(
-        bd["Networkx"], bd["y0"], bd["MScausality"],
-        bd["Coefficients"], {"X": 0}, {"X": 2}, 
-        "Z", summarized_data)
+        sn["Networkx"], sn["y0"], sn["MScausality"],
+        sn["Coefficients"], {"Ras": 5}, {"Ras": 7}, 
+        "Erk", summarized_data, priors)
 
     return result
 
-# Initailize graphs
-bd = backdoor()
+# model coefficients
+informative_prior_coefs = {
+    'EGF': {'intercept': 6., "error": 1},
+    'IGF': {'intercept': 5., "error": 1},
+    'SOS': {'intercept': 2, "error": 1, 'EGF': 0.6, 'IGF': 0.6},
+    'Ras': {'intercept': 3, "error": 1, 'SOS': .5},
+    'PI3K': {'intercept': 0, "error": 1, 'EGF': .5, 'IGF': .5, 'Ras': .5},
+    'Akt': {'intercept': 1., "error": 1, 'PI3K': 0.75},
+    'Raf': {'intercept': 4, "error": 1, 'Ras': 0.8, 'Akt': -.4},
+    'Mek': {'intercept': 2., "error": 1, 'Raf': 0.75},
+    'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
+
 
 # Benchmarks
-N = 25
-rep_range = [10, 20, 50, 100, 250, 500, 1000]
+prior_studies = 5
+N = 100
+rep_range = [10, 20, 50, 100, 250]
 
-med_result = list()
-bd_result = list()
+prior_list = list()
+all_priors = dict()
+prior_results = list()
+all_prior_results = dict()
+informed_results = list()
 
-# Mediator
+
 for r in rep_range:
 
-    temp_rep_list = list()
+    for i in range(1000, prior_studies+1000):
+        
+        sn = signaling_network()
 
-    for i in range(N):
-        temp_rep_list.append(generate_med_data(r, i))
+        data = simulate_data(
+            sn["Networkx"], 
+            coefficients=sn["Coefficients"], 
+            mnar_missing_param=[-4, .3],
+            add_feature_var=True, 
+            n=50, 
+            seed=i)
 
-    temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
-    temp_rep_list.loc[:, "Replicates"] = r
+        summarized_data = dataProcess(
+            data["Feature_data"], 
+            normalization=False, 
+            feature_selection="All",
+            summarization_method="TMP",
+            MBimpute=True,
+            sim_data=True)
 
-    med_result.append(temp_rep_list)
+        pyro.clear_param_store()
+        transformed_data = normalize(summarized_data, wide_format=True)
+        input_data = transformed_data["df"]
+        scale_metrics = transformed_data["adj_metrics"]
 
-med_result = pd.concat(med_result, ignore_index=True)
+        # Full imp Bayesian model
+        lvm = LVM(backend="numpyro")
+        lvm.fit(input_data, sn["MScausality"])
 
-# Backdoor
-for r in rep_range:
+        prior_list.append(lvm.learned_params)
 
-    temp_rep_list = list()
+        prior_results.append(intervention(lvm, {"Ras": 5}, {"Ras": 7}, 
+                                        "Erk", scale_metrics))
 
-    for i in range(N):
-        temp_rep_list.append(generate_bd_data(r, i))
 
-    temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
-    temp_rep_list.loc[:, "Replicates"] = r
+    # Drop keys from dictionaries if they include a string
+    for prior in prior_list:
+        keys_to_remove = [key for key in prior.keys() if "imp" in key]
+        for key in keys_to_remove:
+            del prior[key]
+    priors = pd.DataFrame(prior_list)
+    
+    all_priors[r] = priors
+    all_prior_results[r] = prior_results
 
-    bd_result.append(temp_rep_list)
+    temp_informed_results = list()
 
-bd_result = pd.concat(bd_result, ignore_index=True)
+    for i in range(500, N+500):
+        temp_informed_results.append(generate_sn_data(50, i, dict(priors.mean())))
+    
+    temp_informed_results = pd.concat(temp_informed_results, ignore_index=True)
+    temp_informed_results.loc[:, "Replicates"] = r
+
+    informed_results.append(temp_informed_results)
+
+informed_results = pd.concat(informed_results, ignore_index=True)
+
+all_priors
+all_prior_results
+
+return_data = {
+    "results": informed_results,
+    "priors": all_priors,
+    "priors_results": all_prior_results
+}   
 
 # Save results
-with open('small_network_missing_results.pkl', 'wb') as file:
-    pickle.dump({"Mediator": med_result,
-                 "Backdoor": bd_result}, file)
+with open('igf_results_with_informed_prior.pkl', 'wb') as file:
+    pickle.dump(return_data, file)

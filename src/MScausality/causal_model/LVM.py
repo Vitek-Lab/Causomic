@@ -155,10 +155,10 @@ class LVM:
             if col in inf_priors:
                 priors[col] = {
                     f"{col}_int": self.informative_priors[col]["int"],
-                    f"{col}_scale": self.informative_priors[col]["scale"]}
+                    f"{col}_int_scale": self.informative_priors[col]["scale"]}
             else:
                 priors[col] = {f"{col}_int": 0,
-                               f"{col}_scale": 5}
+                               f"{col}_int_scale": 5}
 
         for col, value in self.descendent_nodes.items():
             
@@ -168,14 +168,14 @@ class LVM:
                     temp[f"{col}_{v}_coef"
                          ] = self.informative_priors[col][f"{v}_coef"]
                     temp[f"{col}_{v}_scale"
-                         ] = self.informative_priors[col][f"{v}_scale"]
+                         ] = self.informative_priors[col][f"{v}_coef_scale"]
             else:
                 for v in value:
                     temp[f"{col}_{v}_coef"] = 0
-                    temp[f"{col}_{v}_scale"] = 5
+                    temp[f"{col}_{v}_coef_scale"] = 5
             
             temp[f"{col}_int"] = 0
-            temp[f"{col}_scale"] = 5
+            temp[f"{col}_int_scale"] = 5
             priors[col] = temp
 
         self.priors = priors
@@ -242,14 +242,14 @@ class LVM:
         for i in range(len(sample_keys)):
             if "scale" not in sample_keys[i] and "imp" not in sample_keys[i]:
                 learned_params[
-                    f"{sample_keys[i]}_mean_param"] = samples[
-                        sample_keys[i]].mean()
+                    f"{sample_keys[i]}"] = samples[
+                        sample_keys[i]].mean().item()
                 learned_params[
-                    f"{sample_keys[i]}_scale_param"] = self.model.get_samples()[
-                        sample_keys[i]].std()
+                    f"{sample_keys[i]}_scale"] = self.model.get_samples()[
+                        sample_keys[i]].std().item()
             elif "scale" in sample_keys[i]:
                 learned_params[
-                    f"{sample_keys[i]}_param"] = samples[sample_keys[i]].mean()
+                    f"{sample_keys[i]}"] = samples[sample_keys[i]].mean().item()
             else:
                 learned_params[
                     f"{sample_keys[i]}"] = samples[sample_keys[i]].mean(axis=0)

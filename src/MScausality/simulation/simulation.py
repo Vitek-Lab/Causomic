@@ -73,16 +73,21 @@ def simulate_data(graph,
             temp_int = intervention[node]
         else:
             temp_int = None
+
         data[node] = simulate_node(data, node_coefficients, n, cell_type,
                                    temp_int)
-
+        
     if cell_type:
         data["cell_type"] = np.repeat([i for i in range(n_cells)], n//n_cells)
         if len(data["cell_type"]) < n:
             data["cell_type"] = np.append(data["cell_type"], n_cells-1)
 
     if add_error:
-        data[error_node] += np.random.normal(0, 5, n)
+        if error_node is None:
+            for node, _ in data.items():
+                data[node] += np.random.normal(0, 1, n)
+        else:
+            data[error_node] += np.random.normal(0, 5, n)
 
     # break data into features
     if add_feature_var:
@@ -333,9 +338,20 @@ def main():
     from MScausality.simulation.simulation import simple_profile_plot
     from MScausality.simulation.example_graphs import signaling_network
 
+    informative_prior_coefs = {
+        'EGF': {'intercept': 6., "error": 1},
+        'IGF': {'intercept': 5., "error": 1},
+        'SOS': {'intercept': 2, "error": .25, 'EGF': 0.6, 'IGF': 0.6},
+        'Ras': {'intercept': 3, "error": .25, 'SOS': .5},
+        'PI3K': {'intercept': 0, "error": .25, 'EGF': .5, 'IGF': .5, 'Ras': .5},
+        'Akt': {'intercept': 1., "error": .25, 'PI3K': 0.75},
+        'Raf': {'intercept': 4, "error": .25, 'Ras': 1.2, 'Akt': -.4},
+        'Mek': {'intercept': 2., "error": .25, 'Raf': 0.75},
+        'Erk': {'intercept': -2, "error": .25, 'Mek': 1.}}
+
     fd = signaling_network(add_independent_nodes=False)
     simulated_fd_data = simulate_data(fd['Networkx'], 
-                                    coefficients=fd['Coefficients'], 
+                                    coefficients=informative_prior_coefs, 
                                     mnar_missing_param=[-3, .3],
                                     add_feature_var=True, n=25, seed=3)
 
