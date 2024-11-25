@@ -44,7 +44,7 @@ def comparison(bulk_graph,
                int2, 
                outcome,
                data,
-               priors):
+               priors=None):
     
     # Ground truth
     intervention_low = simulate_data(bulk_graph, coefficients=coef,
@@ -123,7 +123,7 @@ def generate_sn_data(replicates, temp_seed, priors):
         normalization=False, 
         feature_selection="All",
         summarization_method="TMP",
-        MBimpute=False,
+        MBimpute=True,
         sim_data=True)
     
     summarized_data = summarized_data.loc[:, [
@@ -150,9 +150,9 @@ informative_prior_coefs = {
 
 
 # Benchmarks
-prior_studies = 5
-N = 100
-rep_range = [10, 20, 50, 100, 250]
+prior_studies = 10
+N = 20
+rep_range = [10,20,50,100,250]
 
 prior_list = list()
 all_priors = dict()
@@ -160,58 +160,55 @@ prior_results = list()
 all_prior_results = dict()
 informed_results = list()
 
+for i in range(2000, prior_studies+2000):
+    
+    sn = signaling_network()
+
+    data = simulate_data(
+        sn["Networkx"], 
+        coefficients=sn["Coefficients"], 
+        mnar_missing_param=[-4, .3],
+        add_feature_var=True, 
+        n=50, 
+        seed=i)
+
+    summarized_data = dataProcess(
+        data["Feature_data"], 
+        normalization=False, 
+        feature_selection="All",
+        summarization_method="TMP",
+        MBimpute=False,
+        sim_data=True)
+
+    pyro.clear_param_store()
+    transformed_data = normalize(summarized_data, wide_format=True)
+    input_data = transformed_data["df"]
+    scale_metrics = transformed_data["adj_metrics"]
+
+    # Full imp Bayesian model
+    lvm = LVM(backend="numpyro")
+    lvm.fit(input_data, sn["MScausality"])
+
+    prior_list.append(lvm.learned_params)
+
+    prior_results.append(intervention(lvm, {"Ras": 5}, {"Ras": 7}, 
+                                    "Erk", scale_metrics))
+
+
+# Drop keys from dictionaries if they include a string
+for prior in prior_list:
+    keys_to_remove = [key for key in prior.keys() if "imp" in key]
+    for key in keys_to_remove:
+        del prior[key]
+priors = pd.DataFrame(prior_list)
 
 for r in rep_range:
 
-    for i in range(1000, prior_studies+1000):
-        
-        sn = signaling_network()
-
-        data = simulate_data(
-            sn["Networkx"], 
-            coefficients=sn["Coefficients"], 
-            mnar_missing_param=[-4, .3],
-            add_feature_var=True, 
-            n=50, 
-            seed=i)
-
-        summarized_data = dataProcess(
-            data["Feature_data"], 
-            normalization=False, 
-            feature_selection="All",
-            summarization_method="TMP",
-            MBimpute=True,
-            sim_data=True)
-
-        pyro.clear_param_store()
-        transformed_data = normalize(summarized_data, wide_format=True)
-        input_data = transformed_data["df"]
-        scale_metrics = transformed_data["adj_metrics"]
-
-        # Full imp Bayesian model
-        lvm = LVM(backend="numpyro")
-        lvm.fit(input_data, sn["MScausality"])
-
-        prior_list.append(lvm.learned_params)
-
-        prior_results.append(intervention(lvm, {"Ras": 5}, {"Ras": 7}, 
-                                        "Erk", scale_metrics))
-
-
-    # Drop keys from dictionaries if they include a string
-    for prior in prior_list:
-        keys_to_remove = [key for key in prior.keys() if "imp" in key]
-        for key in keys_to_remove:
-            del prior[key]
-    priors = pd.DataFrame(prior_list)
-    
-    all_priors[r] = priors
-    all_prior_results[r] = prior_results
-
     temp_informed_results = list()
 
-    for i in range(500, N+500):
-        temp_informed_results.append(generate_sn_data(50, i, dict(priors.mean())))
+    for i in range(250, N+250):
+        temp_informed_results.append(generate_sn_data(r, i, dict(priors.mean())))
+        print(r, i-250)
     
     temp_informed_results = pd.concat(temp_informed_results, ignore_index=True)
     temp_informed_results.loc[:, "Replicates"] = r
@@ -220,15 +217,12 @@ for r in rep_range:
 
 informed_results = pd.concat(informed_results, ignore_index=True)
 
-all_priors
-all_prior_results
-
 return_data = {
     "results": informed_results,
-    "priors": all_priors,
-    "priors_results": all_prior_results
+    "priors": priors,
+    "priors_results": prior_results
 }   
-
+# print("snarf")
 # Save results
 with open('igf_results_with_informed_prior.pkl', 'wb') as file:
     pickle.dump(return_data, file)
