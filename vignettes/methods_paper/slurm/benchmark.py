@@ -74,13 +74,10 @@ for i in range(start, end + 1):
     temp_rep_list = list()
     
     print(f"Task {task_id}, Iteration {i}")
-    for i in range(N):
-        temp_rep_list.append(generate_sn_data(r, i, uninformative_prior_coefs))
+    temp_result = generate_sn_data(r, i, uninformative_prior_coefs)
+    temp_result.loc[:, "Replicates"] = r
 
-    temp_rep_list = pd.concat(temp_rep_list, ignore_index=True)
-    temp_rep_list.loc[:, "Replicates"] = r
-
-    igf_result.append(temp_rep_list)
+    igf_result.append(temp_result)
 
 igf_result = pd.concat(igf_result, ignore_index=True)
 
