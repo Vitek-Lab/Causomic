@@ -154,8 +154,8 @@ class LVM:
         for col in self.root_nodes:
             if col in inf_priors:
                 priors[col] = {
-                    f"{col}_int": self.informative_priors[col]["int"],
-                    f"{col}_int_scale": self.informative_priors[col]["scale"]}
+                    f"{col}_int": self.informative_priors[col][f"{col}_int"],
+                    f"{col}_int_scale": self.informative_priors[col][f"{col}_int_scale"]}
             else:
                 priors[col] = {f"{col}_int": 0,
                                f"{col}_int_scale": 5}
@@ -166,16 +166,18 @@ class LVM:
             if col in inf_priors:
                 for v in value: 
                     temp[f"{col}_{v}_coef"
-                         ] = self.informative_priors[col][f"{v}_coef"]
-                    temp[f"{col}_{v}_scale"
-                         ] = self.informative_priors[col][f"{v}_coef_scale"]
+                         ] = self.informative_priors[col][f"{col}_{v}_coef"]
+                    temp[f"{col}_{v}_coef_scale"
+                         ] = self.informative_priors[col][f"{col}_{v}_coef_scale"]
+                temp[f"{col}_int"] = self.informative_priors[col][f"{col}_int"]
+                temp[f"{col}_int_scale"] = self.informative_priors[col][f"{col}_int_scale"]
             else:
                 for v in value:
                     temp[f"{col}_{v}_coef"] = 0
                     temp[f"{col}_{v}_coef_scale"] = 5
             
-            temp[f"{col}_int"] = 0
-            temp[f"{col}_int_scale"] = 5
+                temp[f"{col}_int"] = 0
+                temp[f"{col}_int_scale"] = 5
             priors[col] = temp
 
         self.priors = priors
@@ -480,9 +482,13 @@ class LVM:
 
 def main():
 
-    from MScausality.simulation.example_graphs import mediator
+    from MScausality.simulation.example_graphs import mediator, signaling_network
+    import pickle
 
-    med = mediator(add_independent_nodes=False, n_ind=50)
+    with open(f'vignettes/methods_paper/data/signaling_network/fixed_priors.pkl', 'rb') as f:
+        informed_priors = pickle.load(f)
+
+    med = signaling_network(add_independent_nodes=False)
     simulated_med_data = simulate_data(med['Networkx'], 
                                     coefficients=med['Coefficients'], 
                                     mnar_missing_param=[-3, .4],
@@ -490,60 +496,15 @@ def main():
     med_data = dataProcess(simulated_med_data["Feature_data"], normalization=False, 
                 summarization_method="TMP", MBimpute=False, sim_data=True)
     # med_data = med_data.dropna(how="any",axis=0).reset_index(drop=True)
-
-
+    
     transformed_data = normalize(med_data, wide_format=True)
     input_data = transformed_data["df"]
     scale_metrics = transformed_data["adj_metrics"]
 
-    lvm = LVM(backend="numpyro")
+    lvm = LVM(backend="numpyro", informative_priors=informed_priors)
     lvm.fit(input_data, med["MScausality"])
     lvm.intervention({"X": (0 - scale_metrics["mean"]) / scale_metrics["std"]}, "Z")
     print("finished")
-
-    # imp_data = lvm.imputed_data
-    # X_data = imp_data.loc[imp_data["protein"] == "X"]
-    # Y_data = imp_data.loc[imp_data["protein"] == "M1"]
-    # Z_data = imp_data.loc[imp_data["protein"] == "Z"]
-
-    # X_backdoor_color = np.where(
-    #     (X_data['imp_mean'].isna().values & Y_data['imp_mean'].isna().values), 
-    #     "blue", 
-    #     np.where((X_data['intensity'].isna().values & Y_data['intensity'].isna().values), 
-    #             "red", "orange"))
-
-    # Y_backdoor_color = np.where(
-    #     (Y_data['imp_mean'].isna().values & Z_data['imp_mean'].isna().values), 
-    #     "blue", 
-    #     np.where((Y_data['intensity'].isna().values & Z_data['intensity'].isna().values), 
-    #             "red", "orange"))
-
-    # import matplotlib.pyplot as plt
-
-    # X_data = np.where(
-    #     X_data['imp_mean'].isna(),
-    #     X_data['intensity'], 
-    #     X_data['imp_mean'])
-
-    # Y_data = np.where(
-    #     Y_data['imp_mean'].isna(),
-    #     Y_data['intensity'], 
-    #     Y_data['imp_mean'])
-
-    # Z_data = np.where(
-    #     Z_data['imp_mean'].isna(),
-    #     Z_data['intensity'], 
-    #     Z_data['imp_mean'])
-
-
-    # fig, ax = plt.subplots(2,2, figsize=(10,5))
-
-    # ax[0,0].scatter(input_data.loc[:, "X"], input_data.loc[:, "M1"])
-    # ax[0,1].scatter(X_data, Y_data, color=X_backdoor_color)
-
-    # ax[1,0].scatter(input_data.loc[:, "M1"], input_data.loc[:, "Z"])
-    # ax[1,1].scatter(Y_data, Z_data, color=Y_backdoor_color)
-    # plt.show()
 
 if __name__ == "__main__":
     main()
