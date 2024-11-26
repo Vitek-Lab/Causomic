@@ -16,8 +16,6 @@ from eliater.regression import summary_statistics
 import pyro
 from sklearn.impute import KNNImputer
 
-import matplotlib.pyplot as plt
-
 def intervention(model, int1, int2, outcome, scale_metrics):
     ## MScausality results
     model.intervention({list(int1.keys())[0]: (list(int1.values())[0] \
@@ -106,6 +104,41 @@ def comparison(bulk_graph,
     return result_df
 
 
+def generate_sn_data(replicates, temp_seed, coefs):
+
+    sn = signaling_network()
+
+    # Mediator loop
+    data = simulate_data(
+        sn["Networkx"], 
+        coefficients=coefs, 
+        mnar_missing_param=[-4, .3],
+        add_feature_var=True, 
+        n=replicates, 
+        seed=temp_seed)
+    # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
+
+    summarized_data = dataProcess(
+        data["Feature_data"], 
+        normalization=False, 
+        feature_selection="All",
+        summarization_method="TMP",
+        MBimpute=True,
+        sim_data=True)
+    
+    summarized_data = summarized_data.loc[:, [
+        i for i in summarized_data.columns if i not in ["IGF", "EGF"]]]
+
+    result = comparison(
+        sn["Networkx"], sn["y0"], sn["MScausality"],
+        coefs, {"Ras": 5}, {"Ras": 7}, 
+        "Erk", summarized_data)
+
+    return result
+
+# Benchmark
+igf_result = list()
+
 uninformative_prior_coefs = {
     'EGF': {'intercept': 6., "error": 1},
     'IGF': {'intercept': 5., "error": 1},
@@ -117,117 +150,10 @@ uninformative_prior_coefs = {
     'Mek': {'intercept': 2., "error": 1, 'Raf': 0.75},
     'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
 
-
-sn = signaling_network(add_independent_nodes=True, n_ind=20)
-
-# Mediator loop
-data = simulate_data(
-    sn["Networkx"], 
-    coefficients=uninformative_prior_coefs, 
-    mnar_missing_param=[-4, .3],
-    add_feature_var=True, 
-    n=50, 
-    seed=49)
-# Best seed for viz is 51
-# data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
-
-summarized_data = dataProcess(
-    data["Feature_data"], 
-    normalization=False, 
-    feature_selection="All",
-    summarization_method="TMP",
-    MBimpute=False,
-    sim_data=True)
-
-summarized_data = summarized_data.loc[:, [
-    i for i in summarized_data.columns if i not in ["IGF", "EGF"]]]
-summarized_data = summarized_data.dropna(how="all",axis=1)
-
-# print(summarized_data.isna().mean() * 100)
-
-result = comparison(
-    sn["Networkx"], sn["y0"], sn["MScausality"],
-    uninformative_prior_coefs, {"Ras": 5}, {"Ras": 7}, 
-    "Erk", summarized_data)
-
-
 # sn
-print(result["Ground_truth"])
-print(result["Eliator"])
-print(result["MScausality"])
+igf_results = generate_sn_data(50, 1, uninformative_prior_coefs)
+print("snarf")
 
-
-model = result["MScausality_model"][0]
-imp_data = model.imputed_data
-X_data = imp_data.loc[imp_data["protein"] == "Raf"]
-Z_data = imp_data.loc[imp_data["protein"] == "Erk"]
-
-X_backdoor_color = np.where(
-    (X_data['imp_mean'].isna().values & Z_data['imp_mean'].isna().values), 
-    "blue", 
-    np.where((X_data['intensity'].isna().values & Z_data['intensity'].isna().values), 
-             "red", "orange"))
-
-X_data = np.where(
-    X_data['imp_mean'].isna(),
-    X_data['intensity'], 
-    X_data['imp_mean'])
-
-Z_data = np.where(
-    Z_data['imp_mean'].isna(),
-    Z_data['intensity'], 
-    Z_data['imp_mean'])
-
-
-fig, ax = plt.subplots(1, 3, figsize=(14, 5), constrained_layout=True)
-
-transformed_data = normalize(summarized_data, wide_format=True)
-input_data = transformed_data["df"]
-
-eliator_data = result["obs_data_eliator"][0]
-
-from scipy.stats import linregress
-
-# Define a list of scatter plot configurations
-temp = summarized_data.loc[:, ["Raf", "Erk"]].dropna()
-plots = [
-    (temp.loc[:, "Raf"], 
-     temp.loc[:, "Erk"], "blue",
-     "Observed data", "Raf", "Erk"),
-    (((X_data*transformed_data['adj_metrics']["std"]) \
-     + transformed_data['adj_metrics']["mean"]), 
-    ((Z_data*transformed_data['adj_metrics']["std"]) \
-     + transformed_data['adj_metrics']["mean"]), 
-     X_backdoor_color, "Bayesian imputation", "Raf", "Erk"),
-    (eliator_data["Raf"], eliator_data["Erk"], 
-     X_backdoor_color, "KNN imputation", "Raf", "Erk"),
-]
-
-for i, (x, y, color, title, xlabel, ylabel) in enumerate(plots):
-
-    slope, intercept, r_value, p_value, std_err = linregress(x, y)
-    line_x = np.linspace(x.min()-1, x.max()+1, 100)
-    line_y = slope * line_x + intercept
-
-    ax[i].scatter(x, y, color=color,
-                  edgecolor='k', s=80, alpha=0.8)
-    ax[i].plot(line_x, line_y, color='red', linestyle='--', 
-               linewidth=2)
- 
-    ax[i].set_title(title, fontsize=16, fontweight='bold')
-    # ax[i].set_xlabel(xlabel, fontsize=14)
-    # ax[i].set_ylabel(ylabel, fontsize=14)
-    ax[i].tick_params(axis='both', which='major', labelsize=14)
-    ax[i].grid(True, linestyle='--', alpha=0.3)
-
-    ax[i].set_xlim(3, 9.5)
-    ax[i].set_ylim(1, 12)
-
-fig.suptitle("Imputation Comparison", fontsize=18, fontweight='bold')
-fig.supxlabel("Ras", fontsize=16, fontweight='bold')
-fig.supylabel("Erk", fontsize=16, fontweight='bold')
-
-plt.show()
 # Save results
 # with open('igf_results_with_missing_subset.pkl', 'wb') as file:
 #     pickle.dump(igf_result, file)
