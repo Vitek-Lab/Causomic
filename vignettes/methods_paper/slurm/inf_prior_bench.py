@@ -3,10 +3,12 @@ from MScausality.data_analysis.dataProcess import dataProcess
 from MScausality.simulation.example_graphs import signaling_network
 from MScausality.validation import validate_model
 
+import numpy as np
 import pandas as pd
 import pickle
+import sys
 
-def generate_sn_data(replicates, temp_seed, priors, coef):
+def generate_sn_data(replicates, temp_seed, coef, priors):
 
     sn = signaling_network()
 
@@ -18,6 +20,7 @@ def generate_sn_data(replicates, temp_seed, priors, coef):
         add_feature_var=True, 
         n=replicates, 
         seed=temp_seed)
+    # remove for missing features
     # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
 
     summarized_data = dataProcess(
@@ -25,7 +28,7 @@ def generate_sn_data(replicates, temp_seed, priors, coef):
         normalization=False, 
         feature_selection="All",
         summarization_method="TMP",
-        MBimpute=True,
+        MBimpute=True, # no missing, change to true for missing
         sim_data=True)
     
     summarized_data = summarized_data.loc[:, [
@@ -34,8 +37,7 @@ def generate_sn_data(replicates, temp_seed, priors, coef):
     result = validate_model(
         summarized_data,
         sn["Networkx"], sn["y0"], sn["MScausality"],
-        sn["Coefficients"], {"Ras": 5}, {"Ras": 7}, 
-        "Erk", priors)
+        coef, {"Ras": 5}, {"Ras": 7}, "Erk", priors)
 
     return result
 
@@ -52,33 +54,40 @@ informative_prior_coefs = {
     'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
 
 
+# Get the start and end indices, and task ID from the command-line arguments
+start = int(sys.argv[1])
+end = int(sys.argv[2])
+task_id = int(sys.argv[3])
+
 # Benchmarks
-prior_studies = 10
 N = 5
-rep_range = [10,20,50,100,250]
+rep_range = [10, 20, 50, 100, 250]
 
-informed_results = list()
+idx_sims = np.repeat(rep_range, N)
 
-with open(f'vignettes/methods_paper/data/signaling_network/fixed_priors.pkl', 'rb') as f:
+igf_result = list()
+
+with open(f'/home/kohler.d/applications_project/MScausality/vignettes/methods_paper/data/signaling_network/priors_inflated_scale.pkl', 'rb') as f:
     informed_priors = pickle.load(f)
 
-for r in rep_range:
+print(f"Task {task_id}: Processing iterations {start} to {end}")
+for i in range(start, end + 1):
 
-    temp_informed_results = list()
+    r = idx_sims[i]
 
-    for i in range(250, N+250):
-        temp_informed_results.append(generate_sn_data(r, i, informed_priors,
-                                                      informative_prior_coefs))
-        print(r, i-250)
+    temp_rep_list = list()
     
-    temp_informed_results = pd.concat(temp_informed_results, ignore_index=True)
-    temp_informed_results.loc[:, "Replicates"] = r
+    print(f"Task {task_id}, Iteration {i}")
+    temp_result = generate_sn_data(r, i, informative_prior_coefs, 
+                                   informed_priors)
+    temp_result.loc[:, "Replicates"] = r
 
-    informed_results.append(temp_informed_results)
+    igf_result.append(temp_result)
 
-informed_results = pd.concat(informed_results, ignore_index=True)
+igf_result = pd.concat(igf_result, ignore_index=True)
 
-# print("snarf")
 # Save results
-with open('igf_results_with_informed_prior_test.pkl', 'wb') as file:
-    pickle.dump(informed_results, file)
+with open(f'compile_priors/temp_results_{task_id}.pkl', 'wb') as file:
+    pickle.dump(igf_result, file)
+
+print(f"Task {task_id} complete")
