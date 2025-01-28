@@ -206,7 +206,7 @@ def NumpyroProteomicPerturbationModel(data,
         root_coef_dict_scale[
             node_name] = numpyro.sample(
                 f"{node_name}_scale", 
-                numpyro_dist.Exponential(.1)
+                numpyro_dist.Exponential(1.)
                 )
 
     for node_name, items in downstream_nodes.items():

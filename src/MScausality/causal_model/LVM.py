@@ -158,7 +158,7 @@ class LVM:
                     f"{col}_int_scale": self.informative_priors[col][f"{col}_int_scale"]}
             else:
                 priors[col] = {f"{col}_int": 0,
-                               f"{col}_int_scale": 5}
+                               f"{col}_int_scale": 10}
 
         for col, value in self.descendent_nodes.items():
             
@@ -174,10 +174,10 @@ class LVM:
             else:
                 for v in value:
                     temp[f"{col}_{v}_coef"] = 0
-                    temp[f"{col}_{v}_coef_scale"] = 5
+                    temp[f"{col}_{v}_coef_scale"] = 10
             
                 temp[f"{col}_int"] = 0
-                temp[f"{col}_int_scale"] = 5
+                temp[f"{col}_int_scale"] = 10
             priors[col] = temp
 
         self.priors = priors
@@ -406,13 +406,11 @@ class LVM:
         # Train model and extract results
         if self.backend == "numpyro":
             self.train_numpyro(verbose=verbose)
-        elif self.backend == "pyro":
-            self.train_pyro(verbose=verbose)
-
-        if self.backend == "numpyro":
             self.compile_numpyro_parameters()
         elif self.backend == "pyro":
+            self.train_pyro(verbose=verbose)
             self.compile_pyro_parameters()
+            
         self.add_imputed_values()
 
     def intervention(self, intervention, outcome_node, compare_value=0.):
@@ -456,9 +454,16 @@ class LVM:
         elif self.backend == "numpyro":
             rng_key, rng_key_ = random.split(random.PRNGKey(2))
 
-            zero_model = numpyro.handlers.do(
-                NumpyroProteomicPerturbationModel, 
-                data={next(iter(intervention)): compare_value})
+            if len(intervention) > 1:
+                nodes = list(intervention.keys())
+                zero_model = numpyro.handlers.do(
+                    NumpyroProteomicPerturbationModel, 
+                    data={nodes[0]: compare_value,
+                          nodes[1]: compare_value})
+            else:
+                zero_model = numpyro.handlers.do(
+                    NumpyroProteomicPerturbationModel, 
+                    data={next(iter(intervention)): compare_value})
             zero_predictive = Predictive(zero_model, self.model.get_samples())
             zero_predictions = zero_predictive(rng_key_, None, [],
                                                self.priors,
@@ -485,8 +490,8 @@ def main():
     from MScausality.simulation.example_graphs import mediator, signaling_network
     import pickle
 
-    with open(f'vignettes/methods_paper/data/signaling_network/fixed_priors.pkl', 'rb') as f:
-        informed_priors = pickle.load(f)
+    # with open(f'vignettes/methods_paper/data/signaling_network/fixed_priors.pkl', 'rb') as f:
+    #     informed_priors = pickle.load(f)
 
     med = signaling_network(add_independent_nodes=False)
     simulated_med_data = simulate_data(med['Networkx'], 
@@ -501,7 +506,7 @@ def main():
     input_data = transformed_data["df"]
     scale_metrics = transformed_data["adj_metrics"]
 
-    lvm = LVM(backend="numpyro", informative_priors=informed_priors)
+    lvm = LVM(backend="numpyro")
     lvm.fit(input_data, med["MScausality"])
     lvm.intervention({"X": (0 - scale_metrics["mean"]) / scale_metrics["std"]}, "Z")
     print("finished")

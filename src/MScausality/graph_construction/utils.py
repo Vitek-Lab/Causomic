@@ -2,7 +2,7 @@
 from typing import Iterable, Tuple, List, Dict
 from textwrap import dedent
 from indra_cogex.client import Neo4jClient
-from indra_cogex.representation import norm_id
+from indra_cogex.representation import norm_id, indra_stmts_from_relations
 from indra_cogex.client.enrichment.utils import minimum_evidence_helper
 from indra.statements import Statement
 from protmapper import uniprot_client
@@ -45,7 +45,8 @@ def get_two_step_root(
     *,
     root_nodes: Iterable[Tuple[str, str]],
     downstream_nodes: Iterable[Tuple[str, str]],
-    client: Neo4jClient
+    client: Neo4jClient,
+    minimum_evidence_count
 ) -> List[Statement]:
     """Return the INDRA Statement subnetwork induced by paths of length
     two between nodes A and B in a query with intermediate nodes X such
@@ -75,20 +76,30 @@ def get_two_step_root(
             n1.id IN [{root_nodes_str}]
             AND n2.id IN [{downstream_nodes_str}]
             AND n1.id <> n2.id
+            AND n1.id <> n3.id
+            AND n2.id <> n3.id
             AND n3.type = "human_gene_protein"
             AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            {minimum_evidence_helper(minimum_evidence_count, "r1")}
+            {minimum_evidence_helper(minimum_evidence_count, "r2")}
         RETURN p
         """
     )
 
-    return client.query_relations(query)
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]
 
-def get_one_step_root_up(
+def get_three_step_root(
     *,
     root_nodes: Iterable[Tuple[str, str]],
-    client: Neo4jClient
-    ) -> List[Statement]:
+    downstream_nodes: Iterable[Tuple[str, str]],
+    client: Neo4jClient,
+    minimum_evidence_count
+) -> List[Statement]:
     """Return the INDRA Statement subnetwork induced by paths of length
     two between nodes A and B in a query with intermediate nodes X such
     that paths look like A-X-B.
@@ -100,16 +111,104 @@ def get_one_step_root_up(
         the following examples).
     client :
         The Neo4j client.
-    first_forward:
-        If true, query A->X otherwise query A<-X
-    second_forward:
-        If true, query X->B otherwise query X<-B
 
     Returns
     -------
     :
         The INDRA statement subnetwork induced by the query
     """
+    
+    root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
+    downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
+
+    query = dedent(
+        f"""\
+        MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r3:indra_rel]->(n4:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
+        WHERE
+            n1.id IN [{root_nodes_str}]
+            AND n2.id IN [{downstream_nodes_str}]
+            AND n1.id <> n2.id
+            AND n1.id <> n3.id
+            AND n1.id <> n4.id
+            AND n2.id <> n3.id
+            AND n2.id <> n4.id
+            AND n3.id <> n4.id
+            AND n3.type = "human_gene_protein"
+            AND n4.type = "human_gene_protein"
+            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            AND r3.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']            
+            {minimum_evidence_helper(minimum_evidence_count, "r1")}
+            {minimum_evidence_helper(minimum_evidence_count, "r2")}
+            {minimum_evidence_helper(minimum_evidence_count, "r3")}
+        RETURN p
+        """
+    )
+
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]
+
+
+def get_two_step_root_known_med(
+    *,
+    root_nodes: Iterable[Tuple[str, str]],
+    downstream_nodes: Iterable[Tuple[str, str]],
+    client: Neo4jClient,
+    minimum_evidence_count
+) -> List[Statement]:
+    """Return the INDRA Statement subnetwork induced by paths of length
+    two between nodes A and B in a query with intermediate nodes X such
+    that paths look like A-X-B.
+
+    Parameters
+    ----------
+    nodes :
+        The nodes to query (A and B are one of these nodes in
+        the following examples).
+    client :
+        The Neo4j client.
+
+    Returns
+    -------
+    :
+        The INDRA statement subnetwork induced by the query
+    """
+    
+    root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
+    downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
+
+    query = dedent(
+        f"""\
+        MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
+        WHERE
+            n1.id IN [{root_nodes_str}]
+            AND n2.id IN [{downstream_nodes_str}]
+            AND n3.id IN [{downstream_nodes_str}]
+            AND n1.id <> n2.id
+            AND n1.id <> n3.id
+            AND n2.id <> n3.id
+            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            {minimum_evidence_helper(minimum_evidence_count, "r1")}
+            {minimum_evidence_helper(minimum_evidence_count, "r2")}
+        RETURN p
+        """
+    )
+
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]
+
+def get_one_step_root_up(
+    *,
+    root_nodes: Iterable[Tuple[str, str]],
+    client: Neo4jClient
+    ) -> List[Statement]:
     
     root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
 
@@ -126,6 +225,35 @@ def get_one_step_root_up(
     )
 
     return client.query_relations(query)
+
+def get_one_step_root_down(
+    *,
+    root_nodes: Iterable[Tuple[str, str]],
+    downstream_nodes: Iterable[Tuple[str, str]],
+    client: Neo4jClient,
+    minimum_evidence_count
+    ) -> List[Statement]:
+    
+    root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
+    downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
+    query = dedent(
+        f"""\
+        MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n2:BioEntity)
+        WHERE
+            n1.id IN [{root_nodes_str}]
+            AND n2.id IN [{downstream_nodes_str}]
+            AND n1.id <> n2.id
+            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
+            {minimum_evidence_helper(minimum_evidence_count, "r1")}
+        RETURN p
+        """
+    )
+
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]
 
 def get_id(ids, id_type):
     if id_type == "uniprot":
@@ -186,6 +314,7 @@ def query_confounder_relationships(nodes: Iterable[Tuple[str, str]],
             AND n2.id IN [{nodes_str}]
             AND n1.id <> n2.id
             AND NOT n3 IN [{nodes_str}]
+            AND n3.type = "human_gene_protein"
             AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
@@ -193,7 +322,11 @@ def query_confounder_relationships(nodes: Iterable[Tuple[str, str]],
         RETURN p
     """
     )
-    return client.query_relations(query)
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]
 
 def query_mediator_relationships(nodes: Iterable[Tuple[str, str]], 
                                 client: Neo4jClient,
@@ -213,4 +346,8 @@ def query_mediator_relationships(nodes: Iterable[Tuple[str, str]],
         RETURN p
     """
     )
-    return client.query_relations(query)
+    return [
+        relation
+        for path in client.query_tx(query)
+        for relation in client.neo4j_to_relations(path[0])
+    ]

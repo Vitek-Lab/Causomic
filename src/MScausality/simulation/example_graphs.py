@@ -201,6 +201,13 @@ def signaling_network(include_coef=True,
     graph.add_edge("Akt", "Raf")
     graph.add_edge("Raf", "Mek")
     graph.add_edge("Mek", "Erk")
+    
+    # Additional stuff
+    graph.add_edge("Erk", "Nfkb")
+    graph.add_edge("Erk", "Jnk")
+    graph.add_edge("Ins", "Erk")
+    graph.add_edge("Tnf", "Erk")
+    graph.add_edge("Tnf", "Ins")
 
     if add_independent_nodes:
         for i in range(1, n_ind+1):
@@ -208,9 +215,10 @@ def signaling_network(include_coef=True,
     
     ## Define obs vs latent nodes
     all_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
-                 "Mek", "Erk", "EGF", "IGF"]
+                 "Mek", "Erk", "EGF", "IGF", "Ins", 
+                 "Tnf", "Nfkb", "Jnk"]
     obs_nodes = ["SOS", "PI3K", "Ras", "Raf", "Akt", 
-                 "Mek", "Erk"]
+                 "Mek", "Erk", "Ins", "Nfkb", "Jnk"]
     if add_independent_nodes:
         all_nodes = all_nodes + [f"I{i}" for i in range(1, n_ind+1)]
     
@@ -236,6 +244,7 @@ def signaling_network(include_coef=True,
         coef = {
             'EGF': {'intercept': 6., "error": 1},
             'IGF': {'intercept': 5., "error": 1},
+            'Tnf': {'intercept': 5., "error": 1},
             'SOS': {'intercept': 2, "error": 1, 
                       'EGF': 0.6, 'IGF': 0.6},
             'Ras': {'intercept': 3, "error": 1, 'SOS': .5},
@@ -245,7 +254,11 @@ def signaling_network(include_coef=True,
             'Raf': {'intercept': 4, "error": 1,
                       'Ras': 0.8, 'Akt': -.4},
             'Mek': {'intercept': 2., "error": 1, 'Raf': 0.75},
-            'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
+            'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2, 
+                    'Ins': -.4, 'Tnf': 1.5},
+            'Ins': {'intercept': 1., 'Tnf': 1.5, "error": 1},
+            'Nfkb': {'intercept': 1., 'Erk': 1.5, "error": 1},
+            'Jnk': {'intercept': 1., 'Erk': 1.75, "error": 1}}
         
         if add_independent_nodes:
             for i in range(1, n_ind+1):
