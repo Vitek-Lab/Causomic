@@ -33,7 +33,6 @@ def get_neighbor_network(
         WHERE
             n1.id IN [{nodes_str}]
             AND n2.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             AND n1.id <> n2.id
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
         RETURN p
@@ -79,8 +78,6 @@ def get_two_step_root(
             AND n1.id <> n3.id
             AND n2.id <> n3.id
             AND n3.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
         RETURN p
@@ -135,9 +132,6 @@ def get_three_step_root(
             AND n3.id <> n4.id
             AND n3.type = "human_gene_protein"
             AND n4.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r3.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']            
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
             {minimum_evidence_helper(minimum_evidence_count, "r3")}
@@ -190,8 +184,6 @@ def get_two_step_root_known_med(
             AND n1.id <> n2.id
             AND n1.id <> n3.id
             AND n2.id <> n3.id
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
         RETURN p
@@ -219,7 +211,6 @@ def get_one_step_root_up(
             n1.id IN [{root_nodes_str}]
             AND n1.id <> n2.id
             AND n2.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
         RETURN p
         """
     )
@@ -243,7 +234,6 @@ def get_one_step_root_down(
             n1.id IN [{root_nodes_str}]
             AND n2.id IN [{downstream_nodes_str}]
             AND n1.id <> n2.id
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
         RETURN p
         """
@@ -315,8 +305,6 @@ def query_confounder_relationships(nodes: Iterable[Tuple[str, str]],
             AND n1.id <> n2.id
             AND NOT n3 IN [{nodes_str}]
             AND n3.type = "human_gene_protein"
-            AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
-            AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
         RETURN p
