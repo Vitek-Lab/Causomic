@@ -19,7 +19,7 @@ def generate_sn_data(replicates, temp_seed, coef, priors):
         mnar_missing_param=[-4, .3],
         add_feature_var=True, 
         n=replicates, 
-        add_error=True,
+        add_error=False,
         seed=temp_seed)
     # remove for missing features
     # data["Feature_data"]["Obs_Intensity"] = data["Feature_data"]["Intensity"]
@@ -52,13 +52,13 @@ informative_prior_coefs = {
     'Akt': {'intercept': 1., "error": 1, 'PI3K': 0.75},
     'Raf': {'intercept': 4, "error": 1, 'Ras': 0.8, 'Akt': -.4},
     'Mek': {'intercept': 2., "error": 1, 'Raf': 0.75},
-    'Erk': {'intercept': -2, "error": 1, 'Mek': 1.2}}
+    'Erk': {'intercept': -2, "error": 2, 'Mek': 1.2}}
 
 
 # Get the start and end indices, and task ID from the command-line arguments
-start = int(sys.argv[1])
-end = int(sys.argv[2])
-task_id = int(sys.argv[3])
+# start = int(sys.argv[1])
+# end = int(sys.argv[2])
+# task_id = int(sys.argv[3])
 
 # Benchmarks
 N = 5
@@ -68,17 +68,17 @@ idx_sims = np.repeat(rep_range, N)
 
 igf_result = list()
 
-with open(f'/home/kohler.d/applications_project/MScausality/vignettes/methods_paper/data/signaling_network/priors_inflated_scale.pkl', 'rb') as f:
+with open(f'vignettes/methods_paper/data/signaling_network/priors_inflated_scale.pkl', 'rb') as f:
     informed_priors = pickle.load(f)
 
-print(f"Task {task_id}: Processing iterations {start} to {end}")
-for i in range(start, end + 1):
-
+# print(f"Task {task_id}: Processing iterations {start} to {end}")
+# for i in range(start, end + 1):
+for i in range(25):
     r = idx_sims[i]
 
     temp_rep_list = list()
     
-    print(f"Task {task_id}, Iteration {i}")
+    # print(f"Task {task_id}, Iteration {i}")
     temp_result = generate_sn_data(r, i, informative_prior_coefs, 
                                    informed_priors)
     temp_result.loc[:, "Replicates"] = r

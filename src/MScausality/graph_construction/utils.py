@@ -98,7 +98,8 @@ def get_three_step_root(
     root_nodes: Iterable[Tuple[str, str]],
     downstream_nodes: Iterable[Tuple[str, str]],
     client: Neo4jClient,
-    minimum_evidence_count
+    minimum_evidence_count,
+    mediators=None
 ) -> List[Statement]:
     """Return the INDRA Statement subnetwork induced by paths of length
     two between nodes A and B in a query with intermediate nodes X such
@@ -121,6 +122,15 @@ def get_three_step_root(
     root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
     downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
 
+
+    if mediators is not None:
+        mediators_str = ", ".join(["'%s'" % norm_id(*node) for node in mediators])
+        mediators_str1 = f"AND n3.id IN [{mediators_str}]"
+        mediators_str2 = f"AND n4.id IN [{mediators_str}]"
+    else:
+        mediators_str1 = ""
+        mediators_str2 = ""
+        
     query = dedent(
         f"""\
         MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r3:indra_rel]->(n4:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
@@ -141,6 +151,8 @@ def get_three_step_root(
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
             {minimum_evidence_helper(minimum_evidence_count, "r3")}
+            {mediators_str1}
+            {mediators_str2}
         RETURN p
         """
     )
@@ -157,7 +169,8 @@ def get_two_step_root_known_med(
     root_nodes: Iterable[Tuple[str, str]],
     downstream_nodes: Iterable[Tuple[str, str]],
     client: Neo4jClient,
-    minimum_evidence_count
+    minimum_evidence_count,
+    mediators=None
 ) -> List[Statement]:
     """Return the INDRA Statement subnetwork induced by paths of length
     two between nodes A and B in a query with intermediate nodes X such
@@ -180,13 +193,18 @@ def get_two_step_root_known_med(
     root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
     downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
 
+    if mediators is not None:
+        mediators_str = ", ".join(["'%s'" % norm_id(*node) for node in mediators])
+        mediators_str = f"AND n3.id IN [{mediators_str}]"
+    else:
+        mediators_str = ""
+        
     query = dedent(
         f"""\
         MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n3:BioEntity)-[r2:indra_rel]->(n2:BioEntity)
         WHERE
             n1.id IN [{root_nodes_str}]
             AND n2.id IN [{downstream_nodes_str}]
-            AND n3.id IN [{downstream_nodes_str}]
             AND n1.id <> n2.id
             AND n1.id <> n3.id
             AND n2.id <> n3.id
@@ -194,6 +212,7 @@ def get_two_step_root_known_med(
             AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
+            {mediators_str}
         RETURN p
         """
     )
@@ -236,6 +255,7 @@ def get_one_step_root_down(
     
     root_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in root_nodes])
     downstream_nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in downstream_nodes])
+    
     query = dedent(
         f"""\
         MATCH p=(n1:BioEntity)-[r1:indra_rel]->(n2:BioEntity)
@@ -313,7 +333,7 @@ def query_confounder_relationships(nodes: Iterable[Tuple[str, str]],
             n1.id IN [{nodes_str}]
             AND n2.id IN [{nodes_str}]
             AND n1.id <> n2.id
-            AND NOT n3 IN [{nodes_str}]
+            AND NOT n3.id IN [{nodes_str}]
             AND n3.type = "human_gene_protein"
             AND r1.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
             AND r2.stmt_type IN ['IncreaseAmount', 'DecreaseAmount']
