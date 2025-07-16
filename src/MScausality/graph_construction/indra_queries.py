@@ -168,8 +168,8 @@ def format_query_results(
                       ] if relation_mapper.get(relation.rel_type, 'evidence_count'
                                                ) in relation.data.keys() else None,
         relation.data["belief"] if "belief" in relation.data.keys() else None,
-        sum(json.loads(relation.data["source_counts"]).values()
-            ) if "source_counts" in relation.data.keys() else None,
+        json.loads(relation.data["source_counts"]) \
+            if "source_counts" in relation.data.keys() else None,
         json.loads(relation.data['stmt_json']
                 )['evidence'][0]['text_refs'] if \
                     "stmt_json" in relation.data.keys() \

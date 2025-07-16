@@ -34,17 +34,20 @@ def extract_trog_network(client):
 
 
     # Load compound targets
+    print("Loading compound targets")
     compound_ids = ["troglitazone"]
     compound_df = pull_compound_data(compound_ids, client)
     compound_targets = compound_df["target_symbol"].unique()
 
     # Load DILI targets
+    print("Loading DILI targets")
     gene_disease_df = pull_mesh_data(['D056486'], client)
     dili_targets = gene_disease_df[
         (gene_disease_df["relation"] == "gene_disease_association")
         ].drop_duplicates()["source_symbol"].values
 
     # Two steps between targets and DILI
+    print("Running one-step query")
     one_step_relations = format_query_results(
         get_one_step_root_down(
             root_nodes=get_ids(compound_targets, "gene"), 
@@ -52,6 +55,8 @@ def extract_trog_network(client):
             client=client, minimum_evidence_count=2) # Edit evidence count as needed
     )
 
+
+    print("Running two-step query")
     two_step_relations = format_query_results(
         get_two_step_root_known_med(
             root_nodes=get_ids(compound_targets, "gene"), 
@@ -59,6 +64,8 @@ def extract_trog_network(client):
             client=client, minimum_evidence_count=5 # Edit evidence count as needed
             )
     )
+
+    print("Running three-step query")
     three_step_relations = format_query_results(
         get_three_step_root(
             root_nodes=get_ids(compound_targets, "gene"), 
@@ -66,14 +73,16 @@ def extract_trog_network(client):
             client=client, minimum_evidence_count=5) # Edit evidence count as needed
     )
 
+
     # Combine all relations
     all_network_nodes = pd.concat([one_step_relations, two_step_relations, 
-                                three_step_relations])
-    all_network_nodes = all_network_nodes.drop_duplicates()(
-        subset=["source_hgnc_id", "target_hgnc_id"]
+                                   three_step_relations])
+    all_network_nodes = all_network_nodes.drop_duplicates(
+        subset=["source_id", "target_id"]
     ).reset_index(drop=True)
 
     # Look for latent confounders
+    print("Finding confounders")
     confounder_relations = format_query_results(
         query_confounder_relationships(get_ids(all_network_nodes, "gene"), 
                                     client,
@@ -83,5 +92,11 @@ def extract_trog_network(client):
     # Combine confounders with the rest of the network
     all_network_nodes = pd.concat([all_network_nodes, confounder_relations])
     all_network_nodes = all_network_nodes.drop_duplicates(
-        subset=["source_hgnc_id", "target_hgnc_id"]
+        subset=["source_id", "target_id"]
     ).reset_index(drop=True)
+    return compound_df, gene_disease_df, all_network_nodes
+
+
+if __name__ == "__main__":
+    client = Neo4jClient()
+    compound_df, gene_disease_df, all_network_nodes = extract_trog_network(client)
