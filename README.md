@@ -1,12 +1,12 @@
-# CausOmic
+# Causomic
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Development Status](https://img.shields.io/badge/status-development-orange.svg)](https://github.com/devonjkohler/CausOmic)
 
-**Causal inference methods for mass spectrometry (MS)-based proteomics**
+**Causal inference methods for -omics research**
 
-CausOmic is a Python package designed to perform causal inference using different types of omics data, including proteomics, transcriptomics, metabolomics, phosphoproteomics, ect. The primary goal is to predict the effects of interventions (e.g., drug treatments, protein inhibitions) on biological systems by leveraging causal modeling techniques and protein interaction networks.
+Causomic is a Python package designed to perform causal inference using different types of -omics data, including proteomics, transcriptomics, metabolomics, phosphoproteomics, ect. The primary goal is to predict the effects of interventions (e.g., drug treatments, protein inhibitions) on biological systems by leveraging causal modeling techniques and protein interaction networks.
 
 ## Table of Contents
 
@@ -16,7 +16,6 @@ CausOmic is a Python package designed to perform causal inference using differen
 - [Quick Start](#quick-start)
 - [Data Requirements](#data-requirements)
 - [Main Components](#main-components)
-- [Usage Examples](#usage-examples)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [Citation](#citation)
@@ -24,7 +23,7 @@ CausOmic is a Python package designed to perform causal inference using differen
 
 ## Overview
 
-A fundamental challenge in biological experimentation is understanding how interventions (e.g., drug treatments, protein inhibitions) affect complex biological systems. Traditional machine learning approaches, particularly black box models, attempt to predict these effects without explicitly modeling the underlying causal relationships. This can be problematic when explainability is crucial (e.g., identifying disease-driving pathways) or when models incorrectly infer that downstream proteins causally influence upstream targets. CausOmic addresses these limitations by:
+A fundamental challenge in biological experimentation is understanding how interventions (e.g., drug treatments, protein inhibitions) affect complex biological systems. Traditional machine learning approaches, particularly black box models, attempt to predict these effects without explicitly modeling the underlying causal relationships. This can be problematic when explainability is crucial (e.g., identifying disease-driving pathways) or when models incorrectly infer that downstream proteins causally influence upstream targets. Causomic addresses these limitations by:
 
 1. **Integrating prior biological knowledge** from biological network databases
 2. **Building causal graphs** that represent protein relationships
@@ -76,8 +75,8 @@ The package is particularly useful for:
 
 ### Install from source
 ```bash
-git clone https://github.com/devonjkohler/CausOmic.git
-cd CausOmic
+git clone https://github.com/devonjkohler/Causomic.git
+cd Causomic
 pip install -e .
 ```
 
@@ -141,30 +140,18 @@ lvm.intervention({"X": intervention_value}, "Z")
 ## Data Requirements
 
 ### Input Data Format
-CausOmic expects data in the MSstats `ProteinLevelData` format:
-
-| Column | Description |
-|--------|-------------|
-| `Protein` | Protein identifier |
-| `LogIntensities` | Log-normalized protein intensities |
-| `Condition` | Experimental condition |
-| `BioReplicate` | Biological replicate identifier |
-| `Run` | MS run identifier |
+Causomic expects data in different formats depending on where in the pipeline 
+you start. The causal model and graph construction expects data in wide-format 
+with genes as the columns, samples as the rows, and values being quantitative 
+experimental values.
 
 ### Preprocessing with MSstats (R)
-Before using CausOmic, process your raw MS data with MSstats in R:
 
-```r
-# R code example
-library(MSstats)
-processed_data <- dataProcess(
-    raw_data, 
-    annotation_file,
-    # ... other parameters
-)
-# Export ProteinLevelData for CausOmic
-write.csv(processed_data$ProteinLevelData, "protein_level_data.csv")
-```
+If you are using MS-based proteomics data, we recommend running the data through 
+the MSstats pipeline through the `dataProcess` function. Then you can input the 
+`ProteinLevelData` object directly into Causomic.
+
+Implementation of `dataProcess` directly into Causomic is ongoing.
 
 ## Main Components
 
@@ -188,22 +175,6 @@ write.csv(processed_data$ProteinLevelData, "protein_level_data.csv")
 - Synthetic data generation for testing
 - Model validation utilities
 - Simulation studies for method development
-
-## Usage Examples
-
-### Example Datasets
-The package includes several example datasets:
-- **Talus Bio**: Small molecule inhibition experiments
-- **IGF Pathway**: Insulin-like growth factor signaling
-- **MYC Pathway**: MYC oncogene signaling networks
-- **Synthetic Data**: Simulated proteomics experiments
-
-### Jupyter Notebooks
-Comprehensive examples are available in the `vignettes/` directory:
-- `user_manual.ipynb` - Complete workflow tutorial
-- `graph_building/` - Network construction examples
-- `simulations/` - Simulation studies
-- `methods_paper/` - Methodology validation
 
 ## Documentation
 
@@ -231,8 +202,8 @@ We welcome contributions! Please see our contributing guidelines:
 
 ### Development Setup
 ```bash
-git clone https://github.com/devonjkohler/CausOmic.git
-cd CausOmic
+git clone https://github.com/devonjkohler/Causomic.git
+cd Causomic
 pip install -e ".[dev]"
 ```
 
@@ -245,14 +216,14 @@ isort src/
 
 ## Citation
 
-If you use CausOmic in your research, please cite:
+If you use Causomic in your research, please cite:
 
 ```bibtex
 @software{kohler2024causomic,
-  title={CausOmic: Causal inference methods for mass spectrometry-based proteomics},
+  title={Causomic: Causal inference methods for -omics research},
   author={Kohler, Devon},
   year={2024},
-  url={https://github.com/devonjkohler/CausOmic},
+  url={https://github.com/devonjkohler/Causomic},
   version={0.0.1-dev}
 }
 ```
