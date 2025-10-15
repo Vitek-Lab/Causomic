@@ -249,7 +249,7 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
             source_counts = None
             if "source_counts" in relation.data:
                 try:
-                    source_counts = sum(json.loads(relation.data["source_counts"]).values())
+                    source_counts = json.loads(relation.data["source_counts"])
                 except (json.JSONDecodeError, TypeError):
                     source_counts = None
 

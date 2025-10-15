@@ -19,6 +19,11 @@ import torch
 from jax import numpy as jnp
 from pyro.nn import PyroModule
 
+# Configure Pyro
+# if torch.backends.mps.is_available():
+#     device = torch.device("mps")
+# else:
+device = torch.device("cpu")
 
 class ProteomicPerturbationModel(PyroModule):
     """
@@ -110,7 +115,7 @@ class ProteomicPerturbationModel(PyroModule):
 
             if node_name not in "Output":
                 downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-                    f"{node_name}_scale", pyro_dist.Exponential(1.0)
+                    f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
                 )
 
         for node_name in self.root_nodes:
@@ -123,7 +128,7 @@ class ProteomicPerturbationModel(PyroModule):
             )
 
             root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
-                f"{node_name}_scale", pyro_dist.Exponential(1)
+                f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
             )
 
         # Loop through the data
@@ -138,7 +143,8 @@ class ProteomicPerturbationModel(PyroModule):
                 scale = root_coef_dict_scale[f"{node_name}_scale"]
 
                 x = pyro.sample(node_name, pyro_dist.Normal(mean, scale))
-                obs_eps = pyro.sample(f"{node_name}_obs_eps", pyro_dist.HalfCauchy(0.1))
+                obs_eps = pyro.sample(f"{node_name}_obs_eps", 
+                                      pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)))
 
                 # If data passed in, condition on observed data
                 if f"obs_{node_name}" in data:
@@ -184,7 +190,8 @@ class ProteomicPerturbationModel(PyroModule):
                         y = pyro.sample(f"{node_name}_real", pyro_dist.Normal(mean, scale))
 
                         mask = ~data[f"missing_{node_name}"].bool()
-                        obs_eps = pyro.sample(f"{node_name}_obs_eps", pyro_dist.HalfCauchy(0.1))
+                        obs_eps = pyro.sample(f"{node_name}_obs_eps", 
+                                              pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)))
 
                         # Clamp only observed entries
                         with poutine.mask(mask=mask):
