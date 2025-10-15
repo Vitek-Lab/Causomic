@@ -1047,7 +1047,7 @@ class LVM:
             raise RuntimeError(f"Model fitting failed: {str(e)}") from e
 
     def intervention(
-        self, intervention: Dict[str, float], outcome_node: str, compare_value: float = 0.0
+        self, intervention: Dict[str, float], outcome_node, compare_value: float = 0.0
     ) -> None:
         """
         Perform interventional analysis to estimate causal effects.
@@ -1062,8 +1062,8 @@ class LVM:
             Dictionary specifying the intervention. Keys are variable names
             and values are the intervention levels.
             Example: {"Treatment": 1.0} or {"Drug_A": 2.0, "Drug_B": 1.5}
-        outcome_node : str
-            Name of the outcome variable to measure the intervention effect on
+        outcome_node
+            Name of the outcome variable (or list of outcome nodes) to measure the intervention effect on
         compare_value : float, default=0.0
             Baseline value for comparison (control condition)
 
