@@ -1108,6 +1108,9 @@ class LVM:
         if self.model is None:
             raise AttributeError("Model must be fitted before performing interventions")
 
+        if isinstance(outcome_node, str):
+            outcome_node = [outcome_node]
+
         # Validate intervention and outcome variables
         all_nodes = set(self.root_nodes + list(self.descendant_nodes.keys()))
 
