@@ -1,5 +1,9 @@
 # Causomic
 
+<div align="center">
+  <img src="data/images/logo.png" alt="Causomic Logo" width="300"/>
+</div>
+
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Development Status](https://img.shields.io/badge/status-development-orange.svg)](https://github.com/devonjkohler/CausOmic)

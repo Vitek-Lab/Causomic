@@ -25,17 +25,17 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 # Third-party imports
 import networkx as nx
 import numpy as np
+import pandas as pd
 
 # Probabilistic programming - NumPyro
 import numpyro
-import pandas as pd
+from jax import random
+from numpyro.infer import MCMC, NUTS
+from numpyro.infer import Predictive as NumpyroPredicitve
 
 # Probabilistic programming - Pyro
 import pyro
 import torch
-from jax import random
-from numpyro.infer import MCMC, NUTS
-from numpyro.infer import Predictive as NumpyroPredicitve
 from pyro import poutine
 from pyro.infer import SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta
@@ -52,6 +52,11 @@ from causomic.simulation.proteomics_simulator import simulate_data
 numpyro.set_platform("cpu")
 numpyro.set_host_device_count(4)
 
+# Configure Pyro
+# if torch.backends.mps.is_available():
+#     device = torch.device("mps")
+# else:
+device = torch.device("cpu")
 
 @dataclass
 class ScaleStats:
@@ -98,7 +103,7 @@ class LVM:
         Initial learning rate for optimizer (Pyro only)
     gamma : float, default=0.01
         Learning rate decay factor (Pyro only)
-    patience : int, default=200
+    patience : int, default=30
         Early stopping patience for SVI convergence (Pyro only)
     min_delta : float, default=5
         Minimum loss improvement to reset patience counter (Pyro only)
@@ -196,7 +201,7 @@ class LVM:
         num_steps: int = 10000,
         initial_lr: float = 0.01,
         gamma: float = 0.01,
-        patience: int = 200,
+        patience: int = 30,
         min_delta: float = 5,
         informative_priors: Optional[Dict[str, Dict[str, float]]] = None,
         verbose: bool = False,
@@ -768,7 +773,7 @@ class LVM:
             n_obs=len(self.input_data),
             root_nodes=self.root_nodes,
             downstream_nodes=self.descendant_nodes,
-        )
+        ).to(device)
 
         # Prepare conditioning data for Pyro model
         condition_data = {}
@@ -790,45 +795,76 @@ class LVM:
             )
             condition_data[f"missing_{node}"] = torch.tensor(self.input_missing.loc[:, node].values)
 
+        condition_data = {key: value.to(device) for key, value in condition_data.items()}
+        
+        # Send all priors (including nested dicts/arrays/scalars) to the selected device
+        def _to_device(val):
+            if isinstance(val, torch.Tensor):
+                return val.to(device)
+            if isinstance(val, dict):
+                return {k: _to_device(v) for k, v in val.items()}
+            if isinstance(val, np.ndarray):
+                return torch.tensor(val, dtype=torch.float32, device=device)
+            if isinstance(val, (list, tuple)):
+                return torch.tensor(val, dtype=torch.float32, device=device)
+            if isinstance(val, (int, float)):
+                return torch.tensor(val, dtype=torch.float32, device=device)
+            try:
+                return torch.tensor(val, dtype=torch.float32, device=device)
+            except Exception:
+                return val
+
+        self.priors = {k: _to_device(v) for k, v in self.priors.items()}
+        
         # Set up optimizer with learning rate decay
         learning_rate_decay = self.gamma ** (1 / self.num_steps)
-        optimizer = pyro.optim.ClippedAdam({"lr": self.initial_lr, "lrd": learning_rate_decay})
+        optimizer = pyro.optim.ClippedAdam({"lr": self.initial_lr, 
+                                            "lrd": learning_rate_decay})
 
         # Use AutoDelta guide for point estimates
         guide = AutoDelta(model)
 
         # Set up SVI inference
-        svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
+        svi = SVI(model, guide, optimizer, 
+                  loss=Trace_ELBO())
 
         if verbose:
             print(f"Starting SVI training for {self.num_steps} steps with early stopping")
             print(f"Patience: {self.patience}, Min delta: {self.min_delta}")
 
         # Training loop with early stopping
-        best_loss = float("inf")
-        steps_since_improvement = 0
+        EMA_ALPHA = 0.05          # smoothing (0=no smoothing, 1=instant)
+        REL_MIN_DELTA = 0.002     # require 0.2% improvement vs best EMA
+
+        best_ema = float("inf")
+        ema_loss = None
+        steps_no_improve = 0
 
         for step in range(self.num_steps):
             loss = svi.step(condition_data, self.priors)
 
-            if verbose and step % 100 == 0:
-                print(f"Step {step}: Loss = {loss:.4f}")
+            # Exponential moving average of loss
+            ema_loss = loss if ema_loss is None else EMA_ALPHA * loss + (1 - EMA_ALPHA) * ema_loss
 
-            # Check for improvement
-            if loss < best_loss - self.min_delta:
-                best_loss = loss
-                steps_since_improvement = 0
+            if verbose and step % 100 == 0:
+                print(f"Step {step}: loss={loss:.4f}  ema={ema_loss:.4f}")
+
+            # Relative improvement check on EMA-smoothed loss
+            improved = ema_loss < best_ema * (1.0 - REL_MIN_DELTA)
+            if improved:
+                best_ema = ema_loss
+                steps_no_improve = 0
             else:
-                steps_since_improvement += 1
+                steps_no_improve += 1
 
             # Early stopping condition
-            if steps_since_improvement >= self.patience:
+            if steps_no_improve >= self.patience:
                 if verbose:
-                    print(f"Early stopping at step {step} with loss {loss:.4f}")
+                    print(f"Early stopping at step {step} (best ema {best_ema:.4f})")
                 break
 
-        if verbose and steps_since_improvement < self.patience:
-            print(f"Training completed at step {self.num_steps} with loss {loss:.4f}")
+        if verbose and steps_no_improve < self.patience:
+            print(f"Training completed at step {self.num_steps} (best ema {best_ema:.4f})")
 
         self.model = model
         self.guide = guide
@@ -1047,7 +1083,10 @@ class LVM:
             raise RuntimeError(f"Model fitting failed: {str(e)}") from e
 
     def intervention(
-        self, intervention: Dict[str, float], outcome_node, compare_value: float = 0.0
+        self, intervention: Dict[str, float], 
+        outcome_node: Union[str, List[str]], 
+        compare_value: float = 0.0,
+        predictive_samples: Optional[int] = 100,
     ) -> None:
         """
         Perform interventional analysis to estimate causal effects.
@@ -1062,10 +1101,12 @@ class LVM:
             Dictionary specifying the intervention. Keys are variable names
             and values are the intervention levels.
             Example: {"Treatment": 1.0} or {"Drug_A": 2.0, "Drug_B": 1.5}
-        outcome_node
-            Name of the outcome variable (or list of outcome nodes) to measure the intervention effect on
+        outcome_node : Union[str, List[str]]
+            Name of the outcome variable or list of outcome variables to measure the intervention effect on
         compare_value : float, default=0.0
             Baseline value for comparison (control condition)
+        predictive_samples : int, default=1000
+            Number of posterior samples to draw for estimating outcomes
 
         Sets
         ----
@@ -1108,46 +1149,63 @@ class LVM:
         if self.model is None:
             raise AttributeError("Model must be fitted before performing interventions")
 
+        # Convert outcome_node to list if it is a string
         if isinstance(outcome_node, str):
             outcome_node = [outcome_node]
 
         # Validate intervention and outcome variables
         all_nodes = set(self.root_nodes + list(self.descendant_nodes.keys()))
 
-        for var in intervention.keys():
+        for var in list(intervention.keys()):
             if var not in all_nodes:
-                raise ValueError(f"Intervention variable '{var}' not found in causal graph")
+                print(f"Warning: Intervention variable '{var}' not found in causal graph. It will be ignored.")
+                intervention.pop(var)
 
-        if outcome_node not in all_nodes:
-            raise ValueError(f"Outcome node '{outcome_node}' not found in causal graph")
+        if not intervention:
+            raise ValueError("All intervention variables are missing from the causal graph.")
+
+        # Support outcome_node as a list or a single string
+        missing_outcomes = set(outcome_node) - all_nodes
+        if missing_outcomes:
+            print(f"Warning: Outcome node(s) {missing_outcomes} not found in causal graph. They will be ignored.")
+            outcome_node = [node for node in outcome_node if node in all_nodes]
+        if not outcome_node:
+            raise ValueError("All outcome nodes are missing from the causal graph.")
 
         intervention_df = self._to_z(pd.DataFrame(intervention, index=[0])).dropna(
             axis=1, how="all"
         )
         intervention = intervention_df.iloc[0].dropna().to_dict()
 
-        # if compare_value != 0.0:
-        #     compare_value = self._to_z(torch.tensor([compare_value]))[0].item()
+        compare_dict = dict()
+        for var in intervention.keys():
+            compare_dict[var] = compare_value
+        compare_df = self._to_z(pd.DataFrame(compare_dict, index=[0])).dropna(
+            axis=1, how="all"
+        )
+        compare_value = compare_df.iloc[0].dropna().to_dict()
 
         # Handle different backends
         if self.backend == "pyro":
-            self._intervention_pyro(intervention, outcome_node, compare_value)
+            self._intervention_pyro(intervention, outcome_node, compare_value, predictive_samples)
         elif self.backend == "numpyro":
-            self._intervention_numpyro(intervention, outcome_node, compare_value)
+            self._intervention_numpyro(intervention, outcome_node, compare_value, predictive_samples)
         else:
             raise ValueError(f"Unsupported backend: {self.backend}")
 
         # Convert results from z-score scale back to natural/original scale
-        if outcome_node != "Output":
+        if "Output" not in outcome_node:
             if self.posterior_samples is not None:
-                self.posterior_samples = self._from_z(torch.tensor(self.posterior_samples)).numpy()
+                self.posterior_samples = self._from_z(
+                    self.posterior_samples).dropna(axis=1, how="all")
             if self.intervention_samples is not None:
                 self.intervention_samples = self._from_z(
-                    torch.tensor(self.intervention_samples)
-                ).numpy()
+                    self.intervention_samples
+                ).dropna(axis=1, how="all")
 
     def _intervention_pyro(
-        self, intervention: Dict[str, float], outcome_node: str, compare_value: float
+        self, intervention: Dict[str, float], outcome_node: str, 
+        compare_value: float, predictive_samples: int,
     ) -> None:
         """Perform intervention analysis using Pyro backend."""
         # Prepare conditioning data (no missing values for intervention)
@@ -1165,16 +1223,9 @@ class LVM:
             )
 
         # Create baseline intervention (control condition)
-        if len(intervention) > 1:
-            intervention_vars = list(intervention.keys())
-            baseline_intervention = {
-                intervention_vars[0]: torch.tensor(compare_value, dtype=torch.float32),
-                intervention_vars[1]: torch.tensor(compare_value, dtype=torch.float32),
-            }
-        else:
-            baseline_intervention = {
-                list(intervention.keys())[0]: torch.tensor(compare_value, dtype=torch.float32)
-            }
+        baseline_intervention = {
+            var: torch.tensor(value, dtype=torch.float32) for var, value in compare_value.items()
+        }
 
         # Convert intervention values to tensors
         intervention_tensors = {
@@ -1184,20 +1235,32 @@ class LVM:
         # Baseline model (control)
         baseline_model = poutine.do(self.model, data=baseline_intervention)
         baseline_predictive = pyro.infer.Predictive(
-            baseline_model, guide=self.guide, num_samples=self.num_samples
+            baseline_model, guide=self.guide, num_samples=predictive_samples
         )
         baseline_predictions = baseline_predictive(condition_data, self.priors)
 
         # Intervention model
         intervention_model = poutine.do(self.model, data=intervention_tensors)
         intervention_predictive = pyro.infer.Predictive(
-            intervention_model, guide=self.guide, num_samples=self.num_samples
+            intervention_model, guide=self.guide, num_samples=predictive_samples
         )
         intervention_predictions = intervention_predictive(condition_data, self.priors)
 
         # Extract predictions for outcome node
-        self.posterior_samples = baseline_predictions[outcome_node].flatten()
-        self.intervention_samples = intervention_predictions[outcome_node].flatten()
+        if isinstance(outcome_node, (list, tuple, set)):
+            self.posterior_samples = pd.DataFrame(
+                {node: baseline_predictions[node].flatten().detach().numpy() for node in outcome_node}
+            )
+            self.intervention_samples = pd.DataFrame(
+                {node: intervention_predictions[node].flatten().detach().numpy() for node in outcome_node}
+            )
+        else:
+            self.posterior_samples = pd.DataFrame(
+                {outcome_node: baseline_predictions[outcome_node].flatten().detach().numpy()}
+            )
+            self.intervention_samples = pd.DataFrame(
+                {outcome_node: intervention_predictions[outcome_node].flatten().detach().numpy()}
+            )
 
     def _intervention_numpyro(
         self, intervention: Dict[str, float], outcome_node: str, compare_value: float
@@ -1260,131 +1323,138 @@ def main() -> None:
     4. Intervention analysis
     5. Visualization of results
     """
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-    from causomic.simulation.example_graphs import mediator, signaling_network
+    # from causomic.simulation.example_graphs import mediator, signaling_network
 
-    print("=== LVM Example Workflow ===")
+    # print("=== LVM Example Workflow ===")
 
-    # Generate mediator graph and simulate data
-    print("1. Generating mediator model and simulating data...")
-    med_graph = mediator(add_independent_nodes=False, output_node=True)
+    # # Generate mediator graph and simulate data
+    # print("1. Generating mediator model and simulating data...")
+    # med_graph = mediator(add_independent_nodes=False, output_node=True)
 
-    simulated_data = simulate_data(
-        med_graph["Networkx"],
-        coefficients=med_graph["Coefficients"],
-        add_error=False,
-        mnar_missing_param=[-3, 0.4],  # Missing not at random
-        add_feature_var=True,
-        n=100,
-        seed=2,
-    )
+    # simulated_data = simulate_data(
+    #     med_graph["Networkx"],
+    #     coefficients=med_graph["Coefficients"],
+    #     add_error=False,
+    #     mnar_missing_param=[-3, 0.4],  # Missing not at random
+    #     add_feature_var=True,
+    #     n=100,
+    #     seed=2,
+    # )
 
-    # Process feature-level data to protein-level
-    print("2. Processing feature-level data...")
-    input_data = dataProcess(
-        simulated_data["Feature_data"],
-        normalization=False,
-        summarization_method="TMP",
-        MBimpute=False,
-        sim_data=True,
-    )
+    # # Process feature-level data to protein-level
+    # print("2. Processing feature-level data...")
+    # input_data = dataProcess(
+    #     simulated_data["Feature_data"],
+    #     normalization=False,
+    #     summarization_method="TMP",
+    #     MBimpute=False,
+    #     sim_data=True,
+    # )
 
-    input_data.loc[:, "Output"] = simulated_data["Protein_data"]["Output"]
+    # input_data.loc[:, "Output"] = simulated_data["Protein_data"]["Output"]
 
-    # Fit LVM model
-    print("4. Fitting LVM model with Pyro backend...")
-    lvm = LVM(backend="pyro", num_steps=2000, verbose=True)
-    lvm.fit(input_data, med_graph["causomic"])
+    # # Fit LVM model
+    # print("4. Fitting LVM model with Pyro backend...")
+    # lvm = LVM(backend="pyro", num_steps=2000, verbose=True)
+    # lvm.fit(input_data, med_graph["causomic"])
 
-    # Perform intervention analysis
-    print("5. Performing intervention analysis...")
-    intervention_value = 3.0
-    lvm.intervention({"X": intervention_value}, "Output")
+    # # Perform intervention analysis
+    # print("5. Performing intervention analysis...")
+    # intervention_value = 3.0
+    # lvm.intervention({"X": intervention_value}, ["M1", "Z"])
 
-    # Process imputed data for visualization
-    print("6. Processing imputed data...")
-    imputed_data = lvm.imputed_data.copy()
-    imputed_data["intensity"] = np.where(
-        imputed_data["was_missing"], imputed_data["imp_mean"], imputed_data["intensity"]
-    )
+    # # Process imputed data for visualization
+    # print("6. Processing imputed data...")
+    # imputed_data = lvm.imputed_data.copy()
+    # imputed_data["intensity"] = np.where(
+    #     imputed_data["was_missing"], imputed_data["imp_mean"], imputed_data["intensity"]
+    # )
 
-    # Create wide format for plotting
-    imputed_data["index"] = np.tile(
-        np.arange(1, len(input_data) + 1), len(imputed_data["protein"].unique())
-    )
-    lvm_imputed = imputed_data.pivot(index="index", columns="protein", values="intensity")
+    # # Create wide format for plotting
+    # imputed_data["index"] = np.tile(
+    #     np.arange(1, len(input_data) + 1), len(imputed_data["protein"].unique())
+    # )
+    # lvm_imputed = imputed_data.pivot(index="index", columns="protein", values="intensity")
 
-    # Visualization 1: Imputed vs Original Data
-    print("7. Creating visualizations...")
-    plt.figure(figsize=(12, 5))
+    # # Visualization 1: Imputed vs Original Data
+    # print("7. Creating visualizations...")
+    # plt.figure(figsize=(12, 5))
 
-    plt.subplot(1, 2, 1)
-    missing_indices = imputed_data[imputed_data["was_missing"]]["index"].unique()
-    colors = ["red" if idx in missing_indices else "blue" for idx in lvm_imputed.index]
+    # plt.subplot(1, 2, 1)
+    # missing_indices = imputed_data[imputed_data["was_missing"]]["index"].unique()
+    # colors = ["red" if idx in missing_indices else "blue" for idx in lvm_imputed.index]
 
-    plt.scatter(lvm_imputed["M1"], lvm_imputed["Z"], alpha=0.6, c=colors, s=20)
-    plt.xlabel("M1 (Mediator)")
-    plt.ylabel("Z (Outcome)")
-    plt.title("M1 vs Z\n(Red: Imputed, Blue: Observed)")
-    plt.grid(True, alpha=0.3)
+    # plt.scatter(lvm_imputed["M1"], lvm_imputed["Z"], alpha=0.6, c=colors, s=20)
+    # plt.xlabel("M1 (Mediator)")
+    # plt.ylabel("Z (Outcome)")
+    # plt.title("M1 vs Z\n(Red: Imputed, Blue: Observed)")
+    # plt.grid(True, alpha=0.3)
 
-    # Visualization 2: Distribution by Output
-    plt.subplot(1, 2, 2)
-    for output_val in sorted(input_data["Output"].unique()):
-        subset = input_data[input_data["Output"] == output_val]
-        plt.hist(subset["X"], bins=20, alpha=0.6, label=f"Output={output_val}")
+    # # Visualization 2: Distribution by Output
+    # plt.subplot(1, 2, 2)
+    # for output_val in sorted(input_data["Output"].unique()):
+    #     subset = input_data[input_data["Output"] == output_val]
+    #     plt.hist(subset["X"], bins=20, alpha=0.6, label=f"Output={output_val}")
 
-    plt.xlabel("X (Treatment)")
-    plt.ylabel("Count")
-    plt.title("Distribution of X by Output")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    # plt.xlabel("X (Treatment)")
+    # plt.ylabel("Count")
+    # plt.title("Distribution of X by Output")
+    # plt.legend()
+    # plt.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
 
-    # Intervention analysis across multiple values
-    print("8. Analyzing intervention effects across values...")
-    intervention_values = [0, 1, 2, 3, 4, 5, 6]
-    intervention_results = []
+    # # Intervention analysis across multiple values
+    # print("8. Analyzing intervention effects across values...")
+    # intervention_values = [0, 1, 2, 3, 4, 5, 6]
+    # intervention_results = []
 
-    for value in intervention_values:
-        lvm.intervention({"X": value}, "Output")
-        mean_effect = lvm.intervention_samples.mean()
-        std_effect = lvm.intervention_samples.std()
-        intervention_results.append((value, mean_effect, std_effect))
+    # for value in intervention_values:
+    #     lvm.intervention({"X": value}, "Output")
+    #     mean_effect = lvm.intervention_samples.mean()
+    #     std_effect = lvm.intervention_samples.std()
+    #     intervention_results.append((value, mean_effect, std_effect))
 
-    # Plot intervention effects
-    plt.figure(figsize=(10, 6))
-    values, means, stds = zip(*intervention_results)
+    # # Plot intervention effects
+    # plt.figure(figsize=(10, 6))
+    # values, means, stds = zip(*intervention_results)
 
-    plt.errorbar(
-        values,
-        means,
-        yerr=stds,
-        fmt="o-",
-        capsize=5,
-        color="royalblue",
-        ecolor="darkorange",
-        linewidth=2,
-        markersize=8,
-        markeredgewidth=2,
-    )
+    # plt.errorbar(
+    #     values,
+    #     means,
+    #     yerr=stds,
+    #     fmt="o-",
+    #     capsize=5,
+    #     color="royalblue",
+    #     ecolor="darkorange",
+    #     linewidth=2,
+    #     markersize=8,
+    #     markeredgewidth=2,
+    # )
 
-    plt.xlabel("Intervention Value (X)", fontsize=12)
-    plt.ylabel("Expected Outcome (Output)", fontsize=12)
-    plt.title("Causal Effect of X on Output", fontsize=14, fontweight="bold")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+    # plt.xlabel("Intervention Value (X)", fontsize=12)
+    # plt.ylabel("Expected Outcome (Output)", fontsize=12)
+    # plt.title("Causal Effect of X on Output", fontsize=14, fontweight="bold")
+    # plt.grid(True, alpha=0.3)
+    # plt.tight_layout()
+    # plt.show()
 
-    print(f"\n=== Results Summary ===")
-    print(f"Model fitted with {len(lvm)} observations")
-    print(f"Missing data imputed: {lvm.imputed_data['was_missing'].sum():.0f} values")
-    print(f"Intervention effects range: {min(means):.3f} to {max(means):.3f}")
-    print("Analysis completed successfully!")
+    # print(f"\n=== Results Summary ===")
+    # print(f"Model fitted with {len(lvm)} observations")
+    # print(f"Missing data imputed: {lvm.imputed_data['was_missing'].sum():.0f} values")
+    # print(f"Intervention effects range: {min(means):.3f} to {max(means):.3f}")
+    # print("Analysis completed successfully!")
 
+    import pickle
+    with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/lvm_model.pkl", "rb") as file:
+        lvm = pickle.load(file)
+
+    test = lvm.intervention({"NQO1" : 5}, 
+                     "SOD1", predictive_samples=100)
+    print(test)
 
 if __name__ == "__main__":
     main()
