@@ -472,7 +472,7 @@ def repair_confounding(data: pd.DataFrame,
                     independent = False
                 if independent:
                     found_adjustment = True
-                    found_Z = Z
+                    found_Z = combo
                     break
 
             if found_adjustment:
@@ -502,11 +502,11 @@ def repair_confounding(data: pd.DataFrame,
     for res in results:
         src = Variable(res.get("source"))
         tgt = Variable(res.get("target"))
-        if res.get("add_latent"):
+        Z = res.get("Z")
+        if res.get("add_latent") or Z is None:
             # y0_graph.add_undirected_edge(src, tgt)
             pass
         else:
-            Z = res.get("Z") or []
             # add nodes and directed edges from Z -> source and Z -> target
             for node in Z:
                 node = Variable(node)
