@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 from indra.databases.chebi_client import get_chebi_id_from_name, get_chebi_name_from_id
 from indra.databases.hgnc_client import get_hgnc_id, get_hgnc_name
 from indra.databases.mesh_client import get_mesh_name
+from indra.databases.go_client import get_go_label
 from indra.databases.uniprot_client import get_gene_name
 from indra.statements import Statement
 from indra_cogex.client import Neo4jClient
@@ -209,6 +210,7 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
         "CHEBI": get_chebi_name_from_id,
         "MESH": get_mesh_name,
         "UP": get_gene_name,
+        "GO": get_go_label
     }
 
     # Custom field mapping for different relation types
@@ -421,7 +423,7 @@ def mesh_query(query_ids: List[Tuple[str, str]], client: Neo4jClient) -> List[St
     nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in query_ids])
 
     query = dedent(
-        f"""\
+        f"""
         MATCH p=(n1:BioEntity)-[r1:indra_rel|gene_disease_association]->(n2:BioEntity)
         WHERE
             n2.id IN [{nodes_str}]
@@ -474,3 +476,24 @@ def pull_mesh_data(mesh_ids: List[str], client: Neo4jClient) -> pd.DataFrame:
     query_results = mesh_query(query_ids=query_ids, client=client)
     data = format_query_results(query_results)
     return data
+
+def pull_go_data(go_ids: List[str], client: Neo4jClient) -> pd.DataFrame:
+
+    query_ids = [("GO", go_id) for go_id in go_ids]
+    query_results = mesh_query(query_ids=query_ids, client=client)
+    data = format_query_results(query_results)
+    return data
+
+
+def main():
+    from indra_cogex.client import Neo4jClient
+
+    client = Neo4jClient(url=os.getenv("API_URL"), 
+                            auth=(os.getenv("USER"), 
+                                os.getenv("PASSWORD"))
+                        )
+    gene_disease_df = pull_go_data(['0006915'], client)
+    print(gene_disease_df)
+    
+if __name__ == "__main__":
+    main()

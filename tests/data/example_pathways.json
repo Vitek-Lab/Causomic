@@ -1,0 +1,8 @@
+{
+  "Pathway1": {
+    "geneSymbols": ["G1", "G2", "G3"]
+  },
+  "Pathway2": {
+    "geneSymbols": ["G4", "G5"]
+  }
+}
