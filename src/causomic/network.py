@@ -1,4 +1,3 @@
-
 """
 Network estimation module for causal inference using Bayesian network learning.
 
@@ -27,115 +26,127 @@ Dependencies:
     - causomic.graph_construction: Custom modules for prior data reconciliation and utilities
 """
 
-from collections import Counter
 import os
-import pandas as pd
+from collections import Counter
+
+import networkx as nx
 import numpy as np
-from pgmpy.estimators import ExpertKnowledge
+import pandas as pd
 from indra_cogex.client import Neo4jClient
-from y0.graph import NxMixedGraph
+
+# Parallel processing and progress tracking
+from joblib import Parallel, delayed
+from pgmpy.estimators import ExpertKnowledge
+from sklearn.impute import KNNImputer
+from tqdm import tqdm
 from y0.algorithm.falsification import get_graph_falsifications
 from y0.dsl import Variable
+from y0.graph import NxMixedGraph
 
-from pgmpy.estimators.CITests import pearsonr
-import networkx as nx
-
-from causomic.graph_construction.prior_data_reconciliation import run_bootstrap, \
-    SparseHillClimb, BICGaussIndraPriors
-from causomic.graph_construction.utils import get_one_step_root_down, \
-    query_confounder_relationships, get_three_step_root, \
-        get_two_step_root_known_med
 from causomic.graph_construction.indra_queries import format_query_results, get_ids
-from causomic.graph_construction.repair import convert_to_y0_graph
-from sklearn.impute import KNNImputer
-from itertools import combinations
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from causomic.graph_construction.prior_data_reconciliation import (
+    BICGaussIndraPriors,
+    SparseHillClimb,
+    calculate_edge_probabilities,
+    run_bootstrap,
+)
+from causomic.graph_construction.repair import convert_to_y0_graph, process_failed_test
+from causomic.graph_construction.utils import (
+    get_one_step_root_down,
+    get_three_step_root,
+    get_two_step_root_known_med,
+    query_confounder_relationships,
+)
+from causomic.graph_construction.utils_nx import query_confounders
 
-def extract_indra_prior(source: list, 
-                        target: list, 
-                        measured_proteins: list, 
-                        client: Neo4jClient, 
-                        one_step_evidence: int = 1, 
-                        two_step_evidence: int = 1,
-                        three_step_evidence: int = 3, 
-                        confounder_evidence: int = 10) -> pd.DataFrame:
+
+def extract_indra_prior(
+    source: list,
+    target: list,
+    measured_proteins: list,
+    client: Neo4jClient,
+    one_step_evidence: int = 1,
+    two_step_evidence: int = 1,
+    three_step_evidence: int = 3,
+    confounder_evidence: int = 10,
+) -> pd.DataFrame:
     """
     Extract prior biological knowledge from INDRA databases using multi-step pathway queries.
-    
+
     This function queries the INDRA knowledge graph to extract causal relationships
     between source proteins, target proteins, and measured proteins. It performs
     queries at different path lengths (1-3 steps) and different evidence thresholds
     to build a comprehensive prior network for causal inference.
-    
+
     Parameters
     ----------
     source : list of str
         List of source protein names (e.g., ['EGFR', 'IGF1']). These represent
         the upstream regulators or treatment conditions in the causal model.
-        
+
     target : list of str
         List of target protein names (e.g., ['MEK', 'ERK', 'MAPK']). These represent
         the downstream outcomes or endpoints of interest.
-        
+
     measured_proteins : list of str
         List of all measured protein names in the dataset. Used to constrain
         queries to only include relationships between measured variables.
-        
+
     client : Neo4jClient
         Authenticated INDRA Neo4j client for querying the biological knowledge graph.
         Should be initialized with proper credentials and database URL.
-        
+
     one_step_evidence : int, optional
         Minimum evidence count threshold for direct (1-step) relationships.
         Lower values include more relationships but with less evidence support.
         Default is 1.
-        
+
     two_step_evidence : int, optional
         Minimum evidence count threshold for 2-step relationships (source -> mediator -> target).
         Default is 1.
-        
+
     three_step_evidence : int, optional
         Minimum evidence count threshold for 3-step relationships.
         Higher threshold due to increased uncertainty in longer paths.
         Default is 3.
-        
+
     confounder_evidence : int, optional
         Minimum evidence count threshold for relationships between confounding variables.
         Higher threshold to focus on well-supported confounding relationships.
         Default is 10.
-        
+
     Returns
     -------
     pd.DataFrame
         DataFrame containing the extracted prior network with columns:
-        - 'source_symbol': Source protein name (gene symbol)
-        - 'target_symbol': Target protein name (gene symbol)
+        - 'source': Source protein name (gene symbol)
+        - 'target': Target protein name (gene symbol)
         - 'evidence_count': Total evidence count supporting this relationship
-        
+
         Protein names have hyphens removed for consistency with data formatting.
-        
+
     Notes
     -----
     - Queries are restricted to "IncreaseAmount" and "DecreaseAmount" relationships
     - Evidence counts are summed across multiple query results for the same edge
     - Confounder relationships are identified among all proteins in the network
     - The function prints summary statistics of extracted relationships
-    
+
     Examples
     --------
     >>> from indra_cogex.client import Neo4jClient
     >>> import os
-    >>> 
+    >>>
     >>> # Initialize INDRA client
     >>> client = Neo4jClient(
-    ...     url=os.getenv("API_URL"), 
+    ...     url=os.getenv("API_URL"),
     ...     auth=("neo4j", os.getenv("PASSWORD"))
     ... )
-    >>> 
+    >>>
     >>> # Extract prior network
     >>> priors = extract_indra_prior(
     ...     source=['EGFR', 'IGF1'],
-    ...     target=['MEK', 'ERK'], 
+    ...     target=['MEK', 'ERK'],
     ...     measured_proteins=['EGFR', 'IGF1', 'MEK', 'ERK', 'AKT'],
     ...     client=client,
     ...     one_step_evidence=2,
@@ -148,78 +159,122 @@ def extract_indra_prior(source: list,
     one_step_relations = format_query_results(
         get_one_step_root_down(
             root_nodes=get_ids(source, "gene"),
-            downstream_nodes=get_ids(target, "gene"), 
-            client=client, 
+            downstream_nodes=get_ids(target, "gene"),
+            client=client,
             relation=["IncreaseAmount", "DecreaseAmount"],
-            minimum_evidence_count=one_step_evidence)
+            minimum_evidence_count=one_step_evidence,
+        )
     )
 
     # Query two-step relationships: source -> mediator -> target
     two_step_relations = format_query_results(
         get_two_step_root_known_med(
-            root_nodes=get_ids(source, "gene"), 
-            downstream_nodes=get_ids(target, "gene"), 
+            root_nodes=get_ids(source, "gene"),
+            downstream_nodes=get_ids(target, "gene"),
             client=client,
             relation=["IncreaseAmount", "DecreaseAmount"],
             minimum_evidence_count=two_step_evidence,
-            mediators=get_ids(measured_proteins, "gene"))
+            mediators=get_ids(measured_proteins, "gene"),
+        )
     )
 
     # Query three-step relationships: source -> med1 -> med2 -> target
     three_step_relations = format_query_results(
         get_three_step_root(
             root_nodes=get_ids(source, "gene"),
-            downstream_nodes=get_ids(target, "gene"), 
-            client=client, relation=["IncreaseAmount", "DecreaseAmount"],
+            downstream_nodes=get_ids(target, "gene"),
+            client=client,
+            relation=["IncreaseAmount", "DecreaseAmount"],
             minimum_evidence_count=three_step_evidence,
-            mediators=get_ids(measured_proteins, "gene"))
+            mediators=get_ids(measured_proteins, "gene"),
+        )
     )
 
     # Combine initial relationship queries
     all_relations = pd.concat(
-        [one_step_relations, two_step_relations, three_step_relations],
-        ignore_index=True)
-    all_network_nodes = pd.unique(
-        all_relations[['source_symbol', 'target_symbol']].values.ravel())
-    
-    # Query confounder relationships among all discovered network nodes
-    confounder_relations = format_query_results(
-        query_confounder_relationships(
-            get_ids(all_network_nodes, "gene"), 
-            client, minimum_evidence_count=confounder_evidence,
-            mediators=get_ids(measured_proteins, "gene"))
+        [one_step_relations, two_step_relations, three_step_relations], ignore_index=True
     )
-    confounder_relations = confounder_relations[
-        confounder_relations["relation"].isin(["IncreaseAmount", "DecreaseAmount"])]
+    all_network_nodes = pd.unique(all_relations[["source", "target"]].values.ravel())
 
-    # Remove duplicate confounder relationships
-    confounder_relations = confounder_relations.drop_duplicates(
-        subset=["source_symbol", "target_symbol", "relation", "evidence_count"])
+    # Query confounder relationships among all discovered network nodes
+    # confounder_relations = format_query_results(
+    #     query_confounder_relationships(
+    #         get_ids(all_network_nodes, "gene"),
+    #         client, minimum_evidence_count=confounder_evidence,
+    #         mediators=get_ids(measured_proteins, "gene"))
+    # )
+    # confounder_relations = confounder_relations[
+    #     confounder_relations["relation"].isin(["IncreaseAmount", "DecreaseAmount"])]
+
+    # # Remove duplicate confounder relationships
+    # confounder_relations = confounder_relations.drop_duplicates(
+    #     subset=["source", "target", "relation", "evidence_count"])
 
     # Combine all relationship types into final network
     all_relations = pd.concat(
-        [one_step_relations, two_step_relations, three_step_relations, 
-         confounder_relations], ignore_index=True)
-    all_network_nodes = pd.unique(
-        all_relations[['source_symbol', 'target_symbol']].values.ravel())
+        [one_step_relations, two_step_relations, three_step_relations], ignore_index=True
+    )
+    all_network_nodes = pd.unique(all_relations[["source", "target"]].values.ravel())
 
     # Extract relevant columns and aggregate evidence counts
-    prior_network = all_relations.loc[
-        :, ["source_symbol", "target_symbol", "evidence_count"]]
+    prior_network = all_relations.loc[:, ["source", "target", "evidence_count"]]
 
     # Sum evidence counts for duplicate edges (same source-target pair)
-    prior_network = prior_network.groupby(
-        ["source_symbol", "target_symbol"], as_index=False)["evidence_count"].sum()
+    prior_network = prior_network.groupby(["source", "target"], as_index=False)[
+        "evidence_count"
+    ].sum()
 
     # Clean protein names by removing hyphens for consistency
-    prior_network["source_symbol"] = prior_network["source_symbol"].str.replace("-", "")
-    prior_network["target_symbol"] = prior_network["target_symbol"].str.replace("-", "")
+    prior_network["source"] = prior_network["source"].str.replace("-", "")
+    prior_network["target"] = prior_network["target"].str.replace("-", "")
 
     # Print summary statistics
     print(f"Number of proteins pulled: {len(all_network_nodes)}")
     print(f"Number of reconciled edges pulled: {len(prior_network)}")
 
     return prior_network
+
+
+def consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=0.5):
+
+    # build edge priors dict from indra_priors DataFrame
+    df = indra_priors.copy()
+    df["source"] = df["source"].astype(str).str.replace("-", "")
+    df["target"] = df["target"].astype(str).str.replace("-", "")
+
+    edge_priors = {(row["source"], row["target"]): row["edge_p"] for _, row in df.iterrows()}
+
+    counts = Counter()
+    total = 0
+
+    for dag in bootstrap_dags:
+        if dag is None:
+            continue
+        counts.update(list(dag.edges()))
+        total += 1
+
+    G = nx.DiGraph()
+    for dag in bootstrap_dags:
+        if dag:
+            G.add_nodes_from(dag.nodes())
+
+    # def weight(edge):
+    #     f = counts[edge] / max(total, 1)
+    #     return f
+    def weight(edge):
+        f = counts[edge] / max(total, 1)
+        p = np.clip(edge_priors.get(edge, 0.5), 1e-6, 1 - 1e-6)
+        return f + lam * np.log(p / (1 - p))
+
+    candidates = [e for e, c in counts.items() if c / max(total, 1) >= min_freq]
+
+    candidates.sort(key=weight, reverse=True)
+    for u, v in candidates:
+        G.add_edge(u, v)
+        if not nx.is_directed_acyclic_graph(G):
+            G.remove_edge(u, v)
+    return G
+
 
 def estimate_posterior_dag(
     data: pd.DataFrame,
@@ -228,40 +283,41 @@ def estimate_posterior_dag(
     scoring_function: type = BICGaussIndraPriors,
     search_algorithm: type = SparseHillClimb,
     n_bootstrap: int = 100,
-    add_high_corr_edges_to_priors: bool = True,
+    add_high_corr_edges_to_priors: bool = False,
     corr_threshold: float = 0.95,
-    edge_probability: float = 0.9) -> pd.DataFrame:
+    edge_probability: float = 0.5,
+) -> NxMixedGraph:
     """
     Estimate a posterior directed acyclic graph (DAG) using bootstrap sampling.
-    
+
     This function combines observational data with prior biological knowledge to learn
     a causal network structure. It uses bootstrap resampling to quantify uncertainty
     in the learned edges and returns only those edges that appear with sufficient
     frequency across bootstrap samples. The function automatically creates expert
     knowledge constraints by forbidding edges not present in the prior network.
-    
+
     Parameters
     ----------
     data : pd.DataFrame
         Observational data matrix where rows are samples and columns are variables.
         Should contain numeric values for all variables in the network.
         Column names should match protein names in indra_priors.
-        
+
     indra_priors : pd.DataFrame
         Prior knowledge about causal relationships extracted from INDRA databases.
-        Should contain columns: 'source_symbol', 'target_symbol', 'evidence_count'.
+        Should contain columns: 'source', 'target', 'evidence_count'.
         Typically generated using the extract_indra_prior function.
-        
+
     prior_strength : float, optional
         Weight given to prior knowledge relative to data. Higher values give more
         importance to the priors, while lower values rely more heavily on the data.
         Default is 5.0. Typical range is 0.1 to 10.0.
-        
+
     scoring_function : type, optional
         Class implementing the scoring function for evaluating DAG quality.
         Default is BICGaussIndraPriors which incorporates INDRA prior information.
         Other options include standard BIC or BDeu scores.
-        
+
     search_algorithm : type, optional
         Class implementing the structure learning algorithm for DAG search.
         Default is SparseHillClimb which is optimized for sparse biological networks.
@@ -271,37 +327,32 @@ def estimate_posterior_dag(
         Number of bootstrap samples to generate. Higher values provide more
         stable estimates but increase computational cost. Default is 100.
         Typical range: 50-1000.
-        
+
     edge_probability : float, optional
         Minimum probability threshold for including edges in the final network.
         Edges appearing in fewer than this fraction of bootstrap samples are
         excluded. Default is 0.9 (90% threshold).
-        
+
     Returns
     -------
-    pd.DataFrame
-        DataFrame containing the posterior DAG edges with columns:
-        - 'source': Source node of the edge
-        - 'target': Target node of the edge  
-        - 'Probability': Fraction of bootstrap samples containing this edge
-        
-        Only edges with probability > edge_probability are included.
-        
+    NxMixedGraph
+        y0 graph object representing the posterior DAG edges.
+
     Examples
     --------
     >>> import pandas as pd
     >>> from indra_cogex.client import Neo4jClient
-    >>> 
+    >>>
     >>> # Load your data
     >>> data = pd.read_csv('expression_data.csv')
-    >>> 
+    >>>
     >>> # Extract priors from INDRA
     >>> client = Neo4jClient(url=api_url, auth=("neo4j", password))
     >>> priors = extract_indra_prior(
-    ...     source=['EGFR'], target=['ERK'], 
+    ...     source=['EGFR'], target=['ERK'],
     ...     measured_proteins=data.columns.tolist(), client=client
     ... )
-    >>> 
+    >>>
     >>> # Estimate network
     >>> posterior_dag = estimate_posterior_dag(
     ...     data=data,
@@ -310,7 +361,7 @@ def estimate_posterior_dag(
     ...     n_bootstrap=100,
     ...     edge_probability=0.8
     ... )
-    
+
     Notes
     -----
     - The function automatically creates expert knowledge constraints by forbidding
@@ -320,258 +371,315 @@ def estimate_posterior_dag(
     - Computational complexity scales with n_bootstrap and the size of the search space
     - Failed bootstrap runs (returning None) are excluded from probability calculations
     """
-    
+
     # Extract unique nodes from prior network and clean names
-    nodes = pd.unique(
-        indra_priors[['source_symbol', 'target_symbol']].values.ravel())
+    nodes = pd.unique(indra_priors[["source", "target"]].values.ravel())
     nodes = np.array([node.replace("-", "") for node in nodes])
 
     # Generate all possible edges between nodes
-    all_possible_edges = [(u.replace("-", ""), v.replace("-", "")) for u in nodes for v in nodes if u != v]
-    
+    all_possible_edges = [
+        (u.replace("-", ""), v.replace("-", "")) for u in nodes for v in nodes if u != v
+    ]
+
     # Extract observed edges from prior network
     obs_edges = [
-        (indra_priors.loc[i, "source_symbol"].replace("-", ""), 
-        indra_priors.loc[i, "target_symbol"].replace("-", "")) for i in range(len(indra_priors))]
-    
+        (
+            indra_priors.loc[i, "source"].replace("-", ""),
+            indra_priors.loc[i, "target"].replace("-", ""),
+        )
+        for i in range(len(indra_priors))
+    ]
+
     # Define forbidden edges as all edges not in the prior network
     forbidden_edges = [edge for edge in all_possible_edges if edge not in obs_edges]
 
     # Create expert knowledge object with forbidden edges constraint
     expert_knowledge = ExpertKnowledge(forbidden_edges=forbidden_edges)
-    
+
     # Remove hyphens from data column names
     data.columns = [str(col).replace("-", "") for col in data.columns]
-    
+
+    # Verify that every node from the priors appears in the data columns
+    missing_nodes = [str(n) for n in nodes if str(n) not in data.columns]
+    if missing_nodes:
+        raise ValueError(
+            "The following nodes from indra_priors are not present in data.columns: "
+            + ", ".join(sorted(missing_nodes))
+        )
+
     # Prepare input arguments for bootstrap sampling
     model_input = (
-        data, indra_priors, prior_strength, 
-        scoring_function, search_algorithm, expert_knowledge, 
-        add_high_corr_edges_to_priors, corr_threshold
+        data,
+        indra_priors,
+        prior_strength,
+        scoring_function,
+        search_algorithm,
+        expert_knowledge,
+        add_high_corr_edges_to_priors,
+        corr_threshold,
     )
 
     # Run bootstrap sampling to generate multiple DAG hypotheses
     bootstrap_dags = run_bootstrap(*model_input, n_bootstrap)
 
-    # Count occurrences of each edge across all bootstrap samples
-    edge_counts = Counter()
-    for dag in bootstrap_dags:
-        if dag is not None:  # Skip failed bootstrap runs
-            # Update the edge counts with edges from this DAG
-            edge_counts.update(list(dag.edges()))
-    
-    # Calculate edge probabilities based on bootstrap frequency
-    n_dags = len(bootstrap_dags)  # Total number of bootstrap samples
+    # Integrate bootstrap results into one final DAG using consensus approach
+    posterior_dag = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=edge_probability)
+    posterior_dag = pd.DataFrame(posterior_dag.edges, columns=["source", "target"])
 
-    # Create DataFrame with edge probabilities
-    edge_probabilities = pd.DataFrame(
-        [(edge, count / n_dags) for edge, count in edge_counts.items()],
-        columns=["Edge", "Probability"])
+    # Convert posterior DAG to y0 graph format
+    y0_graph = convert_to_y0_graph(posterior_dag)
 
-    # Filter edges based on probability threshold
-    posterior_dag = edge_probabilities.loc[
-        edge_probabilities["Probability"] > edge_probability, :]
-    
-    # Split edge tuples into separate source and target columns
-    posterior_dag[['source', 'target']] = pd.DataFrame(posterior_dag['Edge'].tolist(), 
-                                                       index=posterior_dag.index)
-    # Remove the original Edge column containing tuples
-    posterior_dag = posterior_dag.drop('Edge', axis=1)
-    
-    # Reset index for clean output
-    posterior_dag = posterior_dag.reset_index(drop=True)
-    
-    return posterior_dag
+    return y0_graph
 
-def repair_confounding(data: pd.DataFrame, 
-                       posterior_dag: pd.DataFrame,
-                       client: Neo4jClient,
-                       max_conditional: int = 2,
-                       ) -> NxMixedGraph:
+
+def repair_confounding(
+    data: pd.DataFrame,
+    posterior_dag: NxMixedGraph,
+    indra_graph: nx.DiGraph,
+    max_conditional: int = 2,
+    confounder_evidence: int = 1,
+) -> NxMixedGraph:
     """
     Check for potential confounders in the estimated posterior DAG and repair if possible.
-    
-    This function identifies unobserved confounders in the posterior DAG that 
-    may act as confounders. It then attempts to repair the DAG by looking in 
-    INDRA for potential nodes that can explain the confounding. If the 
+
+    This function identifies unobserved confounders in the posterior DAG that
+    may act as confounders. It then attempts to repair the DAG by looking in
+    INDRA for potential nodes that can explain the confounding. If the
     confounding is resolved, the function returns the repaired DAG. If not,
     it will add a bidirectional edge to indicate unresolved confounding.
     """
 
-    # Convert posterior DAG to y0 graph format
-    y0_graph = convert_to_y0_graph(data, posterior_dag)
-
     # Identify relations with latent confounders
     knn_imputer = KNNImputer(n_neighbors=5)
-    data = pd.DataFrame(knn_imputer.fit_transform(data), 
-                        index=data.index, columns=data.columns)
+    data = pd.DataFrame(knn_imputer.fit_transform(data), index=data.index, columns=data.columns)
 
     falsification_results = get_graph_falsifications(
-        y0_graph,
+        posterior_dag,
         data,
         max_given=max_conditional,
         method="pearson",
         verbose=True,
         significance_level=0.05,
     ).evidence
-    
+
     failed_tests = falsification_results.loc[
-        (falsification_results["p_adj_significant"] == True) & \
-            (falsification_results["given"] != "")].reset_index(drop=True)
-    
-    def _process_failed_test(row):
-        try:
-            source = row["left"]
-            target = row["right"]
-            given = row["given"]
+        (falsification_results["p_adj_significant"] == True)
+        & (falsification_results["given"] != "")
+    ].reset_index(drop=True)
 
-            confounder_relations = format_query_results(
-                query_confounder_relationships(
-                    get_ids([source, target], "gene"),
-                    client, minimum_evidence_count=1,
-                    mediators=get_ids(data.columns, "gene"))
-            )
-            confounder_relations = confounder_relations[
-                confounder_relations["relation"].isin(["IncreaseAmount", "DecreaseAmount"])
-            ]
-            confounder_relations = confounder_relations.groupby(
-                ["source_symbol"], as_index=False)["evidence_count"].sum().sort_values(
-                by="evidence_count", ascending=False)["source_symbol"].values
+    # combine unique nodes from both 'left' and 'right' columns
+    query_relations = failed_tests[["left", "right"]].drop_duplicates()
 
-            add_latent = False
-            found_adjustment = False
-            found_Z = None
+    confounder_relations = dict()
+    for i in tqdm(range(len(query_relations)), desc="Pulling confounder relations"):
+        nodes = [query_relations.loc[i, "left"], query_relations.loc[i, "right"]]
+        # indra_relations = format_query_results(
+        #         query_confounder_relationships(
+        #             get_ids(nodes, "gene"),
+        #             client, minimum_evidence_count=confounder_evidence,
+        #             mediators=get_ids(data.columns, "gene"),
+        #             relation=["IncreaseAmount", "DecreaseAmount"])
+        # )
 
-            # build all non-empty confounder combos (kept same range as original: r in [1])
-            conf_list = list(confounder_relations)
-            all_combos = [
-                combo
-                for r in range(1, 2)
-                for combo in combinations(conf_list, r)
-            ]
+        indra_relations = query_confounders(indra_graph, nodes)
 
-            # normalize 'given' once
-            if isinstance(given, (list, tuple, np.ndarray)):
-                given_list = list(given)
-            elif given is None or (isinstance(given, str) and given == "") or pd.isna(given):
-                given_list = []
-            else:
-                given_list = [given]
+        indra_relations = (
+            indra_relations.groupby(["source"], as_index=False)["evidence_count"]
+            .sum()
+            .sort_values(by="evidence_count", ascending=False)["source"]
+            .values
+        )
 
-            # no confounders → plan to add latent
-            if not all_combos:
-                add_latent = True
-                return {"source": source, "target": target, "add_latent": True, "Z": None}
-
-            # test combos; stop at first success
-            for combo in all_combos:
-                Z = given_list + list(combo)
-                try:
-                    independent = pearsonr(source, target, Z, data, significance_level=0.05)
-                except Exception:
-                    independent = False
-                if independent:
-                    found_adjustment = True
-                    found_Z = combo
-                    break
-
-            if found_adjustment:
-                return {"source": source, "target": target, "add_latent": False, "Z": found_Z}
-            else:
-                return {"source": source, "target": target, "add_latent": True, "Z": None}
-
-        except Exception as e:
-            # On error be conservative: mark as latent confounding
-            return {"source": row.get("left"), "target": row.get("right"), "add_latent": True, "Z": None, "error": str(e)}
-
+        confounder_relations[tuple(nodes)] = indra_relations
 
     # Parallel processing of failed tests
     results = []
-    print(f"Processing {len(failed_tests)} failed tests for confounding repair...")
-    if len(failed_tests) > 0:
-        max_workers = min(32, (os.cpu_count() or 4), len(failed_tests))
-        with ThreadPoolExecutor(max_workers=max_workers) as exc:
-            futures = {
-                exc.submit(_process_failed_test, failed_tests.loc[i]): i
-                for i in range(len(failed_tests))
-            }
-            for fut in as_completed(futures):
-                results.append(fut.result())
+    n = len(failed_tests)
+    print(f"Processing {n} failed tests for confounding repair...")
 
-    # Apply results to y0_graph (sequential to avoid concurrency issues in graph updates)
+    # Use process-based parallelism with tqdm progress reporting
+    results = Parallel(n_jobs=-2)(
+        delayed(process_failed_test)(
+            failed_tests.loc[i], confounder_relations, data, max_conditional
+        )
+        for i in range(len(failed_tests))
+    )
+    # results = list()
+    # for i in range(len(failed_tests)):
+    #     results.append(process_failed_test(
+    #             failed_tests.loc[i],
+    #             confounder_relations,
+    #             data
+    #         ))
+
+    # Process results and collect statistics
+    total_results = len(results)
+    none_results = sum(1 for res in results if not res)
+    valid_results = total_results - none_results
+    repaired_count = 0
+    unrepaired_count = 0
+    new_nodes_added = set()
+    new_edges_added = 0
+
     for res in results:
+        if not res:
+            continue
         src = Variable(res.get("source"))
         tgt = Variable(res.get("target"))
         Z = res.get("Z")
         if res.get("add_latent") or Z is None:
             # y0_graph.add_undirected_edge(src, tgt)
+            unrepaired_count += 1
             pass
         else:
+            repaired_count += 1
             # add nodes and directed edges from Z -> source and Z -> target
             for node in Z:
                 node = Variable(node)
-                if node not in y0_graph.directed.nodes:
-                    y0_graph.add_node(node)
-                if ((node, src) not in y0_graph.directed.edges) and (not nx.has_path(y0_graph.directed, src, node)):
-                    y0_graph.add_directed_edge(node, src, directed=True)
-                if ((node, tgt) not in y0_graph.directed.edges) and (not nx.has_path(y0_graph.directed, tgt, node)):
-                    y0_graph.add_directed_edge(node, tgt, directed=True)
+                if node not in posterior_dag.directed.nodes:
+                    posterior_dag.add_node(node)
+                    new_nodes_added.add(str(node))
+                if ((node, src) not in posterior_dag.directed.edges) and (
+                    not nx.has_path(posterior_dag.directed, src, node)
+                ):
+                    posterior_dag.add_directed_edge(node, src, directed=True)
+                    new_edges_added += 1
+                if ((node, tgt) not in posterior_dag.directed.edges) and (
+                    not nx.has_path(posterior_dag.directed, tgt, node)
+                ):
+                    posterior_dag.add_directed_edge(node, tgt, directed=True)
+                    new_edges_added += 1
 
-    
-    # Final check on confounding
-    # falsification_results = get_graph_falsifications(
-    #     y0_graph,
-    #     data,
-    #     max_given=max_conditional,
-    #     method="pearson",
-    #     verbose=True,
-    #     significance_level=0.05,
-    # ).evidence
-        
-    
-    
-    return y0_graph
+    # Print summary of confounding repair results
+    print("\n" + "=" * 60)
+    print("CONFOUNDING REPAIR SUMMARY")
+    print("=" * 60)
+    print(f"Total failed tests processed: {total_results}")
+    print(f"Valid results obtained: {valid_results}")
+    print(f"Failed/invalid results: {none_results}")
+    print(f"Successfully repaired confounders: {repaired_count}")
+    print(f"Unrepaired confounders: {unrepaired_count}")
+    if new_nodes_added:
+        print(f"New confounder nodes added: {len(new_nodes_added)}")
+        print(f"Added nodes: {', '.join(sorted(new_nodes_added))}")
+    else:
+        print("No new confounder nodes were added")
+    if new_edges_added > 0:
+        print(f"New edges added to repair confounding: {new_edges_added}")
+    else:
+        print("No new edges were added during confounding repair")
+    repair_rate = (repaired_count / valid_results * 100) if valid_results > 0 else 0
+    print(f"Repair success rate: {repair_rate:.1f}%")
+    print("=" * 60 + "\n")
+
+    return posterior_dag
+
 
 def main():
     """
     Example usage of the network estimation pipeline.
-    
+
     Demonstrates how to:
     1. Set up source and target proteins for pathway analysis
     2. Connect to INDRA database using authentication
     3. Extract prior biological knowledge
     4. Use the extracted priors for causal network learning
-    
+
     This function serves as a template for typical causomic workflows
     involving IGF and EGFR signaling pathways.
     """
-    
-    # Define proteins of interest for pathway analysis
-    source = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1'] # Upstream regulators/treatments
-    target = ['ABCC2', 'ALB', 'CAT', 'CYP2C19', 'CYP2C9']  # Downstream targets/outcomes
-    measured_proteins = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1',
-                         'ABCC2', 'ALB', 'CAT', 'CYP2C19', 'CYP2C9', 
-                         'CYP2E1', 'ENO1', 'GPT', 'GSR', 'GSTM1', 
-                         'GSTT1', 'HLA-A', 'HMOX1', 'HPD', 'KNG1', 
-                         'MTHFR', 'NAT2', 'SOD1']
 
-    # Initialize INDRA client with authentication from environment variables
-    client = Neo4jClient(
-        url=os.getenv("API_URL"), 
-        auth=("neo4j", os.getenv("PASSWORD"))
+    # Define proteins of interest for pathway analysis
+    # source = ['PTGS2', 'PPARG', 'INS', 'ABCB11', 'CDKN1B',
+    #           'CDKN1A', 'CD36', 'ADIPOQ', 'TP53', 'TNF']
+    # target = ['ACTB', 'APOE', 'APOH', 'CAT', 'CLU', 'CTNNB1', 'CYP2A6',
+    #           'CYP3A4', 'DHRS7', 'FASN', 'GPD1', 'GSTM4', 'HAO2', 'HPX',
+    #           'IL18', 'KRT8', 'LAP3', 'MAT1A', 'NME2', 'PC', 'RDH13', 'SOD2', 'XYLB']
+    source = ["SERPINE1", "CYP3A4", "CTNNB1", "MAPK1"]
+    target = [
+        "ABCC2",
+        "ALB",
+        "CAT",
+        "CYP2C19",
+        "CYP2C9",
+        "CYP2E1",
+        "ENO1",
+        "GPT",
+        "GSR",
+        "GSTM1",
+        "GSTT1",
+        "HLA-A",
+        "HMOX1",
+        "HPD",
+        "KNG1",
+        "MTHFR",
+        "NAT2",
+        "SOD1",
+    ]
+
+    input_data = pd.read_csv("data/model_input.csv")
+
+    source = np.intersect1d(source, input_data.columns)
+    target = np.intersect1d(target, input_data.columns)
+
+    measured_proteins = input_data.columns.tolist()
+
+    import pickle
+
+    file = "../../AstraZeneca_project/data/INDRA/indranet_dir_graph_fix_corr_weights.pkl"
+
+    # Replace 'file_path.pkl' with your actual file path
+    with open(file, "rb") as f:
+        graph = pickle.load(f)
+    print("Loaded INDRA graph from pickle file.")
+    from causomic.graph_construction.utils_nx import prepare_graph, query_forward_paths
+
+    hgnc_graph = prepare_graph(
+        graph, measured_proteins, ["HGNC"], ["IncreaseAmount", "DecreaseAmount"]
     )
 
-    # Extract biological prior knowledge from INDRA databases
-    network_priors = extract_indra_prior(
-        source, target, measured_proteins, client,
-        one_step_evidence=1, two_step_evidence=1, three_step_evidence=1, 
-        confounder_evidence=1)
-    
+    # Build a mapping: old_name -> new_name (replace '-' with '')
+    mapping = {node: node.replace("-", "") for node in hgnc_graph.nodes()}
+
+    # Relabel nodes
+    hgnc_graph = nx.relabel_nodes(hgnc_graph, mapping)
+
+    indra_prior = query_forward_paths(
+        graph=hgnc_graph,
+        start_nodes=source,
+        end_nodes=target,
+        n_mediators=2,
+        med_ev_filter=[1, 1, 3],
+    )
+
+    print("Extracted prior network from INDRA graph.")
+
+    input_data = input_data.loc[:, measured_proteins]
+
+    # Filter input_data_graph to only include columns (nodes) present in indra_prior
+    indra_prior["source"] = indra_prior["source"].str.replace("-", "")
+    indra_prior["target"] = indra_prior["target"].str.replace("-", "")
+
+    indra_nodes = pd.unique(indra_prior[["source", "target"]].values.ravel())
+
+    input_data.columns = input_data.columns.str.replace("-", "")
+    input_data = input_data.loc[:, input_data.columns.str.replace("-", "").isin(indra_nodes)]
+
+    posterior_network = estimate_posterior_dag(
+        input_data, indra_prior, 5, BICGaussIndraPriors, SparseHillClimb, 100, False, 0.9, 0.5
+    )
+    print(len(posterior_network))
+    print("Estimated posterior network.")
+    posterior_network = repair_confounding(
+        input_data, posterior_network, hgnc_graph, max_conditional=2
+    )
+
+    print(posterior_network)
     # Note: Additional steps would typically include:
     # - Loading observational data
     # - Running estimate_posterior_dag with the extracted priors
     # - Analyzing and visualizing the resulting network
-    
-    
+
+
 if __name__ == "__main__":
     main()

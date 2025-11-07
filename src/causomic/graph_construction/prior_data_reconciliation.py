@@ -47,7 +47,17 @@ Date: 2024
 # Standard library imports
 import logging
 from collections import deque
-from typing import Callable, Deque, Generator, Hashable, Iterable, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Deque,
+    Generator,
+    Hashable,
+    Iterable,
+    Optional,
+    Set,
+    Tuple,
+)
 from xml.parsers.expat import model
 
 # Scientific computing imports
@@ -63,6 +73,7 @@ from joblib import Parallel, delayed
 from pgmpy.base import DAG
 from pgmpy.estimators import ExpertKnowledge, HillClimbSearch, LogLikelihoodGauss
 from pgmpy.estimators.StructureScore import get_scoring_method
+from tqdm import tqdm
 from tqdm.auto import trange
 
 
@@ -373,7 +384,7 @@ class SparseHillClimb(HillClimbSearch):
                 model.add_edge(X, Y)
                 continue
             model.add_edge(X, Y)
-            
+
             Xp = model.get_parents(X)
             Yp = model.get_parents(Y)
             if len(Xp) + 1 <= max_indegree:
@@ -497,7 +508,7 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         # Soft prior component
         prior_bonus = 0
         for parent in parents:
-            p = self.edge_priors.get(variable, {}).get(parent, 0.5)
+            p = self.edge_priors[(parent, variable)]
             p = np.clip(p, 1e-6, 1 - 1e-6)  # Avoid log(0)
 
             log_odds = np.log(p / (1 - p))
@@ -692,33 +703,33 @@ def process_bootstrap(
     """
     import logging
 
-    try:
-        # Suppress INFO logs from pgmpy in this subprocess
-        logging.getLogger("pgmpy").setLevel(logging.WARNING)
+    # try:
+    # Suppress INFO logs from pgmpy in this subprocess
+    logging.getLogger("pgmpy").setLevel(logging.WARNING)
 
-        resampled_data = data.sample(n=len(data), replace=True)
+    # resampled_data = data.sample(n=len(data), replace=True)
+    subsample_frac = 0.67  # try 0.5–0.8
+    resampled_data = data.sample(frac=subsample_frac, replace=False, random_state=None)
 
-        # Initialize the custom scoring function
-        custom_score = score_fn(
-            resampled_data, edge_priors=edge_priors, prior_strength=prior_strength
-        )
+    # Initialize the custom scoring function
+    custom_score = score_fn(resampled_data, edge_priors=edge_priors, prior_strength=prior_strength)
 
-        allowed = set(edge_priors.keys())
-        est = estimator(data=resampled_data, allowed_additions=allowed)
-        # Estimate the DAG using the custom scoring function
-        estimated_dag = est.estimate(
-            scoring_method=custom_score,
-            expert_knowledge=expert_knowledge,
-            max_indegree=3,
-            epsilon=0.01,
-            show_progress=False,
-        )
-        print("one bootstrap finished")
-        return estimated_dag
-    except Exception as e:
-        # Handle the exception here
-        print(f"An error occurred during bootstrap processing: {e}")
-        return None
+    allowed = set(edge_priors.keys())
+    est = estimator(data=resampled_data, allowed_additions=allowed)
+    # Estimate the DAG using the custom scoring function
+    estimated_dag = est.estimate(
+        scoring_method=custom_score,
+        expert_knowledge=expert_knowledge,
+        max_indegree=3,
+        epsilon=0.01,
+        show_progress=False,
+    )
+    # print("one bootstrap finished")
+    return estimated_dag
+    # except Exception as e:
+    #     # Handle the exception here
+    #     print(f"An error occurred during bootstrap processing: {e}")
+    #     return None
 
 
 def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
@@ -749,8 +760,8 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
     --------
     >>> # Process INDRA evidence counts
     >>> indra_df = pd.DataFrame({
-    ...     'source_symbol': ['AKT1', 'TP53', 'MDM2'],
-    ...     'target_symbol': ['MDM2', 'MDM2', 'TP53'],
+    ...     'source': ['AKT1', 'TP53', 'MDM2'],
+    ...     'target': ['MDM2', 'MDM2', 'TP53'],
     ...     'evidence_count': [15, 25, 8]
     ... })
     >>> prob_mapping = calculate_edge_probabilities(indra_df)
@@ -817,22 +828,22 @@ def prepare_indra_priors(indra_priors: pd.DataFrame) -> dict:
     ----------
     indra_priors : pd.DataFrame
         DataFrame with INDRA prior information containing columns:
-        - 'source_symbol': Source protein/gene symbol
-        - 'target_symbol': Target protein/gene symbol
+        - 'source': Source protein/gene symbol
+        - 'target': Target protein/gene symbol
         - 'evidence_count': Number of supporting evidence instances
 
     Returns
     -------
     dict
         Dictionary mapping (source, target) tuples to edge probabilities [0,1].
-        Format: {(source_symbol, target_symbol): probability}
+        Format: {(source, target): probability}
 
     Examples
     --------
     >>> # Prepare INDRA priors for causal discovery
     >>> indra_df = pd.DataFrame({
-    ...     'source_symbol': ['AKT1', 'TP53', 'MDM2'],
-    ...     'target_symbol': ['MDM2', 'MDM2', 'TP53'],
+    ...     'source': ['AKT1', 'TP53', 'MDM2'],
+    ...     'target': ['MDM2', 'MDM2', 'TP53'],
     ...     'evidence_count': [15, 25, 8]
     ... })
     >>> edge_priors = prepare_indra_priors(indra_df)
@@ -866,19 +877,18 @@ def prepare_indra_priors(indra_priors: pd.DataFrame) -> dict:
     indra_priors["edge_p"] = indra_priors["evidence_count"].map(edge_probability_mapper).fillna(1.0)
 
     edge_probabilities = {
-        (indra_priors.loc[i, "source_symbol"],
-            indra_priors.loc[i, "target_symbol"],
+        (
+            indra_priors.loc[i, "source"],
+            indra_priors.loc[i, "target"],
         ): indra_priors.loc[i, "edge_p"]
         for i in range(len(indra_priors))
     }
 
     return edge_probabilities
 
+
 def remove_high_corr_edges_from_blacklist(
-    data: pd.DataFrame,
-    indra_priors: pd.DataFrame,
-    black_list: set,
-    corr_threshold: float = 0.8
+    data: pd.DataFrame, indra_priors: pd.DataFrame, black_list: set, corr_threshold: float = 0.8
 ) -> set:
     """
     Remove edges between highly correlated variables from the blacklist.
@@ -886,9 +896,9 @@ def remove_high_corr_edges_from_blacklist(
     This function identifies pairs of variables in the dataset that exhibit
     high correlation (above a specified threshold) and removes any edges
     between these variables from the provided blacklist. It then adds the edges
-    to the indra_priors DataFrame with a low prior probability (floor of 
-    observed probabilities). This is useful in causal discovery to avoid 
-    excluding potentially valid edges that may represent true causal 
+    to the indra_priors DataFrame with a low prior probability (floor of
+    observed probabilities). This is useful in causal discovery to avoid
+    excluding potentially valid edges that may represent true causal
     relationships rather than mere correlations.
 
     Parameters
@@ -897,8 +907,8 @@ def remove_high_corr_edges_from_blacklist(
         The dataset containing the variables of interest.
     indra_priors : pd.DataFrame
         DataFrame containing INDRA prior information with columns:
-        - 'source_symbol': Source protein/gene symbols
-        - 'target_symbol': Target protein/gene symbols
+        - 'source': Source protein/gene symbols
+        - 'target': Target protein/gene symbols
         - 'evidence_count': Evidence count for each relationship
     black_list : set
         A set of (parent, child) tuples representing edges to be blacklisted.
@@ -952,14 +962,13 @@ def remove_high_corr_edges_from_blacklist(
     updated_blacklist = set(edge for edge in black_list if edge not in high_corr_pairs)
 
     # Add missing high-corr edges to indra_priors DataFrame
-    for (src, tgt) in high_corr_pairs:
-        if not (
-            ((indra_priors["source_symbol"] == src) & (indra_priors["target_symbol"] == tgt)).any()
-        ):
-            new_row = {"source_symbol": src, "target_symbol": tgt, "evidence_count": 1}
+    for src, tgt in high_corr_pairs:
+        if not (((indra_priors["source"] == src) & (indra_priors["target"] == tgt)).any()):
+            new_row = {"source": src, "target": tgt, "evidence_count": 1}
             indra_priors.loc[len(indra_priors)] = new_row
 
     return indra_priors, updated_blacklist
+
 
 def run_bootstrap(
     data: pd.DataFrame,
@@ -968,7 +977,7 @@ def run_bootstrap(
     scoring_function: type,
     search_algorithm: type,
     expert_knowledge: ExpertKnowledge,
-    add_high_corr_edges_to_priors: bool = True,
+    add_high_corr_edges_to_priors: bool = False,
     corr_threshold: float = 0.8,
     n_bootstrap: int = 100,
 ) -> list:
@@ -990,8 +999,8 @@ def run_bootstrap(
         Original dataset for bootstrap resampling with samples as rows and variables as columns
     indra_priors : pd.DataFrame
         DataFrame containing INDRA prior information with columns:
-        - 'source_symbol': Source protein/gene symbols
-        - 'target_symbol': Target protein/gene symbols
+        - 'source': Source protein/gene symbols
+        - 'target': Target protein/gene symbols
         - 'evidence_count': Evidence count for each relationship
     prior_strength : float
         Scaling factor for biological prior influence in scoring functions
@@ -1018,8 +1027,8 @@ def run_bootstrap(
     --------
     >>> # Prepare INDRA prior data
     >>> indra_df = pd.DataFrame({
-    ...     'source_symbol': ['AKT1', 'TP53', 'MDM2'],
-    ...     'target_symbol': ['MDM2', 'MDM2', 'TP53'],
+    ...     'source': ['AKT1', 'TP53', 'MDM2'],
+    ...     'target': ['MDM2', 'MDM2', 'TP53'],
     ...     'evidence_count': [15, 25, 8]
     ... })
     >>>
@@ -1074,7 +1083,7 @@ def run_bootstrap(
         print("INFO: Adding high-corr edges to priors:")
         updated_indra_priors, updated_blacklist = remove_high_corr_edges_from_blacklist(
             data, indra_priors, expert_knowledge.forbidden_edges, corr_threshold
-            )
+        )
         expert_knowledge.forbidden_edges = updated_blacklist
     else:
         updated_indra_priors = indra_priors
@@ -1092,25 +1101,37 @@ def run_bootstrap(
             search_algorithm,
             expert_knowledge,
         )
-        for _ in range(n_bootstrap)
+        for _ in tqdm(range(n_bootstrap), desc="Hill Climb Bootstraps")
     )
+    # for _ in range(n_bootstrap):
+    #     process_bootstrap(
+    #         data,
+    #         edge_probabilities,
+    #         prior_strength,
+    #         scoring_function,
+    #         search_algorithm,
+    #         expert_knowledge,
+    #     )
 
-    return bootstrap_dags    
+    return bootstrap_dags
+
 
 def main():
 
     import pickle
     import time
-    
+
     with open("data/model_input.pkl", "rb") as f:
         model_input = pickle.load(f)
-    # model_input = list(model_input)
-    # model_input[3] = 5
-    # model_input = tuple(model_input)
+    model_input = list(model_input)
+    model_input[3] = AICGaussIndraPriors
+    model_input.append(False)
+    model_input = tuple(model_input)
     start_time = time.time()
     bootstrap_dags = run_bootstrap(*model_input, 50)
     end_time = time.time()
     print(f"Time taken: {end_time - start_time} seconds")
-    
+
+
 if __name__ == "__main__":
     main()

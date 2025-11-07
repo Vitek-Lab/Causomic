@@ -23,7 +23,8 @@ from pyro.nn import PyroModule
 # if torch.backends.mps.is_available():
 #     device = torch.device("mps")
 # else:
-device = torch.device("cpu")
+device = "cpu"  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class ProteomicPerturbationModel(PyroModule):
     """
@@ -142,12 +143,14 @@ class ProteomicPerturbationModel(PyroModule):
                 mean = root_coef_dict_mean[f"{node_name}_int"]
                 scale = root_coef_dict_scale[f"{node_name}_scale"]
 
-                x = pyro.sample(node_name, pyro_dist.Normal(mean, scale))
-                obs_eps = pyro.sample(f"{node_name}_obs_eps", 
-                                      pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)))
-
                 # If data passed in, condition on observed data
                 if f"obs_{node_name}" in data:
+
+                    x = pyro.sample(f"{node_name}_real", pyro_dist.Normal(mean, scale))
+                    obs_eps = pyro.sample(
+                        f"{node_name}_obs_eps",
+                        pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)),
+                    )
 
                     mask = ~data[f"missing_{node_name}"].bool()
 
@@ -157,7 +160,8 @@ class ProteomicPerturbationModel(PyroModule):
                             pyro_dist.Normal(x, obs_eps),
                             obs=data[f"obs_{node_name}"],
                         )
-
+                else:
+                    x = pyro.sample(node_name, pyro_dist.Normal(mean, scale))
                 downstream_distributions[node_name] = x
 
             # Linear regression for each downstream node
@@ -171,27 +175,27 @@ class ProteomicPerturbationModel(PyroModule):
 
                 # Define scale
                 if "Output" not in node_name:
-                    scale = 1  # downstream_coef_dict_scale[f"{node_name}_scale"]
+                    scale = downstream_coef_dict_scale[f"{node_name}_scale"]
 
                 if f"obs_{node_name}" in data:
 
                     if "Output" in node_name:
                         # Binary outcome variable (e.g., toxicity)
-                        pyro.sample(
+                        y = pyro.sample(
                             f"obs_{node_name}",
                             pyro_dist.Bernoulli(logits=mean),
                             obs=data[f"obs_{node_name}"],
                         )
                     else:
-                        if "Z" in node_name:
-                            scale = torch.tensor(1.0)
 
                         # Impute missing values where needed
                         y = pyro.sample(f"{node_name}_real", pyro_dist.Normal(mean, scale))
 
                         mask = ~data[f"missing_{node_name}"].bool()
-                        obs_eps = pyro.sample(f"{node_name}_obs_eps", 
-                                              pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)))
+                        obs_eps = pyro.sample(
+                            f"{node_name}_obs_eps",
+                            pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)),
+                        )
 
                         # Clamp only observed entries
                         with poutine.mask(mask=mask):

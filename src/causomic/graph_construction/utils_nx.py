@@ -1,0 +1,411 @@
+"""Utilities for working with NetworkX graphs produced by INDRA.
+
+This module provides helpers to filter graphs by statement types and
+evidence, compute simple path-based queries, and prepare graphs for
+downstream analysis. Functions generally accept and return NetworkX
+DiGraph objects and, where noted, may modify graphs in-place.
+
+The file intentionally keeps behaviour stable while adding documentation
+and small readability improvements.
+"""
+
+from typing import Any, Dict, Iterable, List, Optional
+
+import networkx as nx
+import pandas as pd
+from tqdm import tqdm
+
+
+def filter_graph_by_stmt_types(graph: nx.DiGraph, stmt_types: Iterable[str]) -> nx.DiGraph:
+    """Return a new DiGraph that contains only edges whose statements
+    include at least one statement with a type in ``stmt_types``.
+
+    The returned graph is a shallow copy: node attributes are copied, and
+    edges keep their attributes except that the ``statements`` list is
+    filtered to only include statements with matching ``stmt_type``.
+
+    Args:
+        graph: Input directed graph with edge attribute "statements" that
+            contains iterable items (typically dicts) describing INDRA
+            statements.
+        stmt_types: Iterable of statement type strings to keep (e.g.
+            "IncreaseAmount", "DecreaseAmount").
+
+    Returns:
+        A new :class:`networkx.DiGraph` containing only the matching edges
+        and their incident nodes.
+    """
+
+    stmt_types_set = set(stmt_types)
+
+    # choose edges where any statement has a stmt_type in the requested set
+    edges_keep = [
+        (u, v)
+        for u, v, attrs in graph.edges(data=True)
+        if any(
+            isinstance(stmt, dict) and stmt.get("stmt_type") in stmt_types_set
+            for stmt in attrs.get("statements", [])
+        )
+    ]
+
+    # build a new graph containing only the kept edges and with statements filtered
+    new_g = nx.DiGraph()
+    for u, v in edges_keep:
+        # copy nodes (including their attributes) if not already present
+        if not new_g.has_node(u):
+            new_g.add_node(u, **graph.nodes[u])
+        if not new_g.has_node(v):
+            new_g.add_node(v, **graph.nodes[v])
+
+        # shallow copy edge attributes and filter the statements list
+        attrs: Dict[str, Any] = dict(graph[u][v])
+        filtered_statements = [
+            stmt
+            for stmt in attrs.get("statements", [])
+            if isinstance(stmt, dict) and stmt.get("stmt_type") in stmt_types_set
+        ]
+        attrs["statements"] = filtered_statements
+        new_g.add_edge(u, v, **attrs)
+
+    return new_g
+
+
+def add_evidence_info(graph: nx.DiGraph) -> nx.DiGraph:
+    """Compute and attach simple evidence summaries to every edge.
+
+    This function updates the graph in-place by adding an ``evidence``
+    attribute for each edge. The attribute is a dict with keys:
+      - ``total_evidence``: integer sum of ``evidence_count`` across
+        statements (missing/None treated as 0)
+      - ``source_evidence``: number of distinct source keys found in the
+        statements' ``source_counts`` dicts
+
+    Args:
+        graph: DiGraph with edge attribute "statements" containing dicts
+            (or similar) describing INDRA statements.
+
+    Returns:
+        The same graph object (modified in-place) for convenience.
+    """
+
+    for u, v, attrs in graph.edges(data=True):
+        stmts = attrs.get("statements", []) or []
+
+        # total evidence count (handles None/missing)
+        total_evidence = sum(int(s.get("evidence_count") or 0) for s in stmts)
+
+        # union of all source keys across statements
+        source_counts = [
+            s.get("source_counts") for s in stmts if isinstance(s.get("source_counts"), dict)
+        ]
+        source_key_union = (
+            set().union(*(sc.keys() for sc in source_counts)) if source_counts else set()
+        )
+        source_keys = len(source_key_union)
+
+        # attach a fresh dict per edge (do not reuse mutable objects)
+        new_ev: Dict[str, int] = {
+            "total_evidence": total_evidence,
+            "source_evidence": source_keys,
+        }
+        graph[u][v]["evidence"] = new_ev
+
+    return graph
+
+
+def filter_graph_by_evidence_count(graph: nx.DiGraph, evidence_count: int) -> nx.DiGraph:
+    """Return a subgraph containing only edges whose total evidence is
+    at least ``evidence_count``.
+
+    Args:
+        graph: DiGraph with edge attribute "evidence" (a dict containing
+            "total_evidence"). If edges do not have that attribute, a
+            default of 0 is assumed.
+        evidence_count: Minimum required total evidence to keep an edge.
+
+    Returns:
+        A new DiGraph containing only the edges that meet the threshold
+        and their incident nodes.
+    """
+
+    edges_to_keep: List[tuple] = []
+    for u, v, attrs in graph.edges(data=True):
+        ev = attrs.get("evidence", {}).get("total_evidence", 0)
+        if ev >= evidence_count:
+            edges_to_keep.append((u, v))
+
+    # Build a new graph containing only those edges
+    filtered_graph = graph.edge_subgraph(edges_to_keep).copy()
+
+    return filtered_graph
+
+
+def filter_graph_by_measured_nodes(graph: nx.DiGraph, measured_nodes: List[str]) -> nx.DiGraph:
+    """Return a subgraph containing only edges where both endpoints are in
+    ``measured_nodes``.
+
+    Args:
+        graph: DiGraph to filter.
+        measured_nodes: Sequence of node identifiers considered 'measured'.
+
+    Returns:
+        A new DiGraph induced by edges connecting only measured nodes.
+    """
+
+    edges_to_keep: List[tuple] = [
+        (u, v) for u, v in graph.edges() if u in measured_nodes and v in measured_nodes
+    ]
+
+    filtered_graph = graph.edge_subgraph(edges_to_keep).copy()
+
+    return filtered_graph
+
+
+def prepare_graph(
+    graph: nx.DiGraph,
+    measured_nodes: List[str],
+    node_types: List[str],
+    stmt_types: List[str],
+) -> nx.DiGraph:
+    """Prepare a graph for analysis by selecting node namespace, measured
+    nodes, and statement types.
+
+    Steps applied (in order):
+      1. Keep only nodes whose ``ns`` attribute is in ``node_types``.
+      2. Restrict edges to those connecting measured nodes.
+      3. Filter edges to only include statements with ``stmt_types``.
+      4. Annotate edges with evidence summary using :func:`add_evidence_info`.
+
+    Args:
+        graph: Original DIgraph produced by INDRA/other pipeline.
+        measured_nodes: List of nodes that were measured (e.g., columns of
+            an input dataset).
+        node_types: Allowed node namespace types (e.g., ["HGNC"]).
+        stmt_types: Allowed statement types to keep on edges.
+
+    Returns:
+        A prepared :class:`networkx.DiGraph` suitable for path queries and
+        downstream processing.
+    """
+
+    # keep only nodes with ns in requested node_types
+    subgraph = graph.subgraph(
+        [n for n, attrs in graph.nodes(data=True) if attrs.get("ns") in node_types]
+    ).copy()
+
+    subgraph = filter_graph_by_measured_nodes(subgraph, measured_nodes)
+    subgraph = filter_graph_by_stmt_types(subgraph, stmt_types)
+    subgraph = add_evidence_info(subgraph)
+
+    return subgraph
+
+
+def query_confounders(
+    graph: nx.DiGraph,
+    confounders: List[str],
+    mediators: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
+    """Find common predecessor nodes (potential confounders) for a pair of
+    target nodes and return their evidence counts.
+
+    Args:
+        graph: DiGraph annotated with edge evidence (see :func:`add_evidence_info`).
+        confounders: Two-element list-like containing the two target node IDs
+            for which to find shared predecessors.
+        mediators: Optional iterable of mediator nodes to restrict the
+            predecessor search. If provided, predecessors will be filtered to
+            the mediator set; otherwise all predecessors are considered.
+
+    Returns:
+        A :class:`pandas.DataFrame` with columns ["source", "target",
+        "evidence_count", "source_count"] listing the edges from each
+        common confounder to the two targets and their evidence summaries.
+    """
+
+    if len(confounders) != 2:
+        raise ValueError("confounders must contain exactly two node identifiers")
+
+    pred_c1 = list(graph.predecessors(confounders[0]))
+    pred_c2 = list(graph.predecessors(confounders[1]))
+
+    if mediators is not None:
+        mediator_set = set(mediators)
+        pred_c1 = [i for i in pred_c1 if i in mediator_set and i != confounders[1]]
+        pred_c2 = [i for i in pred_c2 if i in mediator_set and i != confounders[0]]
+    else:
+        pred_c1 = [i for i in pred_c1 if i != confounders[1]]
+        pred_c2 = [i for i in pred_c2 if i != confounders[0]]
+
+    common_confounders = list(set(pred_c1) & set(pred_c2))
+
+    confounders_edge_list: List[tuple] = []
+    for confounder in common_confounders:
+        edge1 = graph[confounder][confounders[0]]
+        edge2 = graph[confounder][confounders[1]]
+        confounders_edge_list.append(
+            (
+                confounder,
+                confounders[0],
+                edge1["evidence"]["total_evidence"],
+                edge1["evidence"]["source_evidence"],
+            )
+        )
+        confounders_edge_list.append(
+            (
+                confounder,
+                confounders[1],
+                edge2["evidence"]["total_evidence"],
+                edge2["evidence"]["source_evidence"],
+            )
+        )
+
+    confounder_df = pd.DataFrame(
+        confounders_edge_list,
+        columns=["source", "target", "evidence_count", "source_count"],
+    )
+
+    return confounder_df
+
+
+def edge_ok(G: nx.DiGraph, u: str, v: str, thr: int = 5) -> bool:
+    """Return True if edge (u, v) has total evidence >= thr.
+
+    Args:
+        G: Graph containing the edge.
+        u: source node id.
+        v: target node id.
+        thr: evidence threshold (inclusive).
+    """
+
+    d = G[u][v]  # edge attributes dict
+    ev = d.get("evidence", {}).get("total_evidence", 0)
+    return ev >= thr
+
+
+def filtered_paths(
+    G: nx.Graph, source: str, target: str, cutoff: Optional[int] = None, thr: int = 1
+):
+    """Yield simple paths from source to target over edges meeting evidence threshold.
+
+    The function constructs a subgraph view that hides edges failing the
+    evidence threshold and then yields paths found by
+    :func:`networkx.all_simple_paths`.
+    """
+
+    view = nx.subgraph_view(G, filter_edge=lambda u, v: edge_ok(G, u, v, thr=thr))
+    # works for Graph/DiGraph/Multi(Di)Graph (paths are node sequences)
+    yield from nx.all_simple_paths(view, source, target, cutoff=cutoff)
+
+
+def query_forward_paths(
+    graph: nx.DiGraph,
+    start_nodes: Iterable[str],
+    end_nodes: Iterable[str],
+    n_mediators: int = 1,
+    med_ev_filter: Optional[List[int]] = None,
+) -> pd.DataFrame:
+    """Search for simple forward paths from any start node to any end node.
+
+    For each mediator depth from 0..n_mediators the function will collect
+    paths of length equal to the mediator count (i.e., number of edges)
+    subject to the corresponding evidence threshold in ``med_ev_filter``.
+
+    Args:
+        graph: DiGraph annotated with evidence counts on edges.
+        start_nodes: Iterable of starting node ids.
+        end_nodes: Iterable of target node ids.
+        n_mediators: Maximum number of mediators (i.e., path length in edges).
+        med_ev_filter: Optional list of integer thresholds with length
+            ``n_mediators + 1``. If None, defaults to all ones.
+
+    Returns:
+        A pandas.DataFrame with rows for each edge that appears on any
+        discovered path. Columns: ["source", "target", "evidence_count",
+        "source_count"].
+    """
+
+    if med_ev_filter is None:
+        med_ev_filter = [1] * (n_mediators + 1)
+
+    if len(med_ev_filter) != (n_mediators + 1):
+        raise ValueError("med_ev_filter must have length n_mediators + 1")
+
+    paths = []
+    for start in tqdm(list(start_nodes), desc="Processing start nodes"):
+        for end in end_nodes:
+            for med in range(0, n_mediators + 1):
+                thr = med_ev_filter[med]
+                all_paths = list(
+                    filtered_paths(graph, source=start, target=end, cutoff=med, thr=thr)
+                )
+                if all_paths:
+                    paths.extend(all_paths)
+
+    # Flatten list of paths for extraction into df (already flattened by extend)
+    forward_edge_list: List[tuple] = []
+    for path in tqdm(paths, desc="Extracting paths into dataframe"):
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i + 1]
+            edge = graph[u][v]
+            forward_edge_list.append(
+                (u, v, edge["evidence"]["total_evidence"], edge["evidence"]["source_evidence"])
+            )
+
+    forward_df = pd.DataFrame(
+        forward_edge_list, columns=["source", "target", "evidence_count", "source_count"]
+    )
+
+    return forward_df
+
+
+def main():
+
+    file = "../../AstraZeneca_project/data/INDRA/indranet_dir_graph_fix_corr_weights.pkl"
+    import pickle
+
+    # Replace 'file_path.pkl' with your actual file path
+    with open(file, "rb") as f:
+        graph = pickle.load(f)
+
+    trog_targets = ["SERPINE1", "CYP3A4", "CTNNB1", "MAPK1"]
+
+    dili_targets = [
+        "ABCC2",
+        "ALB",
+        "CAT",
+        "CYP2C19",
+        "CYP2C9",
+        "CYP2E1",
+        "ENO1",
+        "GPT",
+        "GSR",
+        "GSTM1",
+        "GSTT1",
+        "HLA-A",
+        "HMOX1",
+        "HPD",
+        "KNG1",
+        "MTHFR",
+        "NAT2",
+        "SOD1",
+    ]
+
+    input_data = pd.read_csv("data/model_input.csv")
+
+    hgnc_graph = prepare_graph(
+        graph, input_data.columns, ["HGNC"], ["IncreaseAmount", "DecreaseAmount"]
+    )
+
+    forward_paths = query_forward_paths(
+        graph=hgnc_graph,
+        start_nodes=trog_targets,
+        end_nodes=dili_targets,
+        n_mediators=2,
+        med_ev_filter=[1, 1, 3],
+    )
+
+    print(forward_paths)
+
+
+if __name__ == "__main__":
+    main()
