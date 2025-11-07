@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Causomic Logo" src="data/images/logo.png" width="360">
+  <img src="https://github.com/devonjkohler/Causomic/data/images/logo.png" height="150">
 </p>
 
 # Causomic
