@@ -650,6 +650,7 @@ def query_confounder_relationships(
     client: Neo4jClient,
     minimum_evidence_count: int,
     mediators: Optional[Iterable[Tuple[str, str]]] = None,
+    relation: Iterable[str] = None,
 ) -> List[Statement]:
     """
     Find potential confounding relationships between node pairs.
@@ -696,6 +697,8 @@ def query_confounder_relationships(
             AND n1.id <> n2.id
             AND NOT n3.id IN [{nodes_str}]
             AND n3.type = "human_gene_protein"
+            AND r1.stmt_type IN {relation}
+            AND r2.stmt_type IN {relation}
             {minimum_evidence_helper(minimum_evidence_count, "r1")}
             {minimum_evidence_helper(minimum_evidence_count, "r2")}
             {mediators_str}
