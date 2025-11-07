@@ -15,6 +15,9 @@ The module supports:
 Author: causomic Team
 """
 
+# Prevent pytest from collecting top-level functions in this module as tests
+__test__ = False
+
 import itertools
 import json
 import re
