@@ -1,7 +1,45 @@
 # See https://setuptools.readthedocs.io/en/latest/build_meta.html
 [build-system]
 requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta:__legacy__"
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "causomic"
+version = "0.0.1-dev"
+description = "Python code for causal modeling of proteomics data."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.9"
+
+authors = [
+	{ name = "Devon Kohler", email = "kohler.d@northeastern.edu" },
+]
+
+maintainers = [
+  { name = "Devon Kohler", email = "kohler.d@northeastern.edu" },
+]
+
+dependencies = [
+	"networkx",
+	"pandas",
+	"pyro-ppl==1.8.5",
+	"torch",
+	"numpy",
+	"y0",
+	"matplotlib",
+	"namedlist",
+	"py3compat",
+	"python-dotenv",
+]
+
+urls = { "Homepage" = "https://github.com/devonjkohler/CausOmic", "Bug Tracker" = "https://github.com/devonjkohler/CausOmic/issues", "Source Code" = "https://github.com/devonjkohler/CausOmic" }
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.black]
 line-length = 100
