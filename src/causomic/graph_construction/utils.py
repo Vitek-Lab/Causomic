@@ -17,6 +17,7 @@ Author: Devon Kohler
 """
 
 # Standard library imports
+from sre_constants import IN
 from textwrap import dedent
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -36,9 +37,11 @@ def get_neighbor_network(
     *,
     nodes: Iterable[Tuple[str, str]],
     client: Neo4jClient,
+    relation: Iterable[str],
     upstream: bool,
     downstream: bool,
     minimum_evidence_count: int,
+    filter_all_nodes: bool = False,
 ) -> List[Statement]:
     """
     Retrieve direct neighbor network for specified nodes.
@@ -53,12 +56,16 @@ def get_neighbor_network(
         Input nodes as (namespace, identifier) tuples, e.g., [("hgnc", "1234")]
     client : Neo4jClient
         Neo4j client instance for database connectivity
+    relation: Iterable[str]
+        List of allowed relationship types for all steps
     upstream : bool
         Whether to include upstream neighbors (regulators of input nodes)
     downstream : bool
         Whether to include downstream neighbors (targets of input nodes)
     minimum_evidence_count : int
         Minimum number of evidences required for relationships
+    filter_all_nodes : bool, default=False
+        If True, only return relationships where all nodes are in the input set
 
     Returns
     -------
@@ -79,25 +86,42 @@ def get_neighbor_network(
     ... )
     >>> print(f"Found {len(neighbors)} upstream regulators")
     """
-    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])
-
+    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])  
+            
     # Construct query pattern based on direction requirements
     if upstream and downstream:
         q = "p=(n2:BioEntity)-[r1:indra_rel]->(n1:BioEntity)-[r2:indra_rel]->(n3:BioEntity)"
-    elif upstream and not downstream:
+        relations = f"AND r1.stmt_type IN {relation}" + f" AND r2.stmt_type IN {relation}"
+        evidence_relations = minimum_evidence_helper(
+            minimum_evidence_count, "r1") + " " + minimum_evidence_helper(
+                minimum_evidence_count, "r2")
+    elif upstream and not downstream: 
         q = "p=(n2:BioEntity)-[r1:indra_rel]->(n1:BioEntity)"
+        relations = f"AND r1.stmt_type IN {relation}"
+        evidence_relations = minimum_evidence_helper(minimum_evidence_count, "r1")
     elif not upstream and downstream:
         q = "p=(n1:BioEntity)-[r1:indra_rel]->(n2:BioEntity)"
+        relations = f"AND r1.stmt_type IN {relation}"
+        evidence_relations = minimum_evidence_helper(minimum_evidence_count, "r1")
     else:
         raise Exception("Either upstream or downstream must be True")
 
+    if filter_all_nodes and upstream and downstream:
+        filter = f"AND n2.id IN [{nodes_str}]" + f" AND n3.id IN [{nodes_str}]"
+    elif filter_all_nodes:
+        filter = f"AND n2.id IN [{nodes_str}]"
+    else:
+        filter = ""
+    
     query = f"""\
         MATCH {q}
         WHERE
             n1.id IN [{nodes_str}]
             AND n2.type = "human_gene_protein"
             AND n1.id <> n2.id
-            {minimum_evidence_helper(minimum_evidence_count, "r1")}
+            {evidence_relations}
+            {relations}
+            {filter}
         RETURN p
     """
 

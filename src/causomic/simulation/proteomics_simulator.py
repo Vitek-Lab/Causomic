@@ -365,10 +365,10 @@ def generate_node_coefficients(parents: List[str]) -> Dict[str, float]:
 
     if len(coefficients.keys()) == 0:
         coefficients["intercept"] = np.random.uniform(15, 25)
+        coefficients["error"] = np.random.uniform(1, 3)
     else:
-        coefficients["intercept"] = np.random.uniform(-5, 5)
-
-    coefficients["error"] = np.random.uniform(0, 1)
+        coefficients["intercept"] = np.random.uniform(5, 15)
+        coefficients["error"] = np.random.uniform(0, 1)
 
     return coefficients
 

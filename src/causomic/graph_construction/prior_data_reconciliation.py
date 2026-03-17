@@ -784,6 +784,7 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
     CDF transformation ensures that higher evidence counts receive higher
     probabilities while maintaining proper probability interpretation.
     """
+    
     edge_evidence = indra_priors["evidence_count"].values.astype(int)
 
     xmin = edge_evidence.min()
@@ -812,7 +813,8 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
     return value_to_cdf
 
 
-def prepare_indra_priors(indra_priors: pd.DataFrame) -> dict:
+def prepare_indra_priors(indra_priors: pd.DataFrame,
+                         convert_to_probability: bool) -> dict:
     """
     Prepare INDRA prior data for causal discovery by converting to edge probabilities.
 
@@ -872,10 +874,12 @@ def prepare_indra_priors(indra_priors: pd.DataFrame) -> dict:
     Missing evidence counts are filled with probability 1.0 to ensure all
     edges in the prior network are considered, even if evidence is sparse.
     """
-    edge_probability_mapper = calculate_edge_probabilities(indra_priors)
-
-    indra_priors["edge_p"] = indra_priors["evidence_count"].map(edge_probability_mapper).fillna(1.0)
-
+    if convert_to_probability:
+        edge_probability_mapper = calculate_edge_probabilities(indra_priors)
+        indra_priors["edge_p"] = indra_priors["evidence_count"].map(edge_probability_mapper).fillna(1.0)
+    else:
+        indra_priors["edge_p"] = indra_priors["evidence_count"]
+        
     edge_probabilities = {
         (
             indra_priors.loc[i, "source"],
@@ -980,6 +984,7 @@ def run_bootstrap(
     add_high_corr_edges_to_priors: bool = False,
     corr_threshold: float = 0.8,
     n_bootstrap: int = 100,
+    convert_to_probability: bool = True,
 ) -> list:
     """
     Run parallel bootstrap analysis for robust causal discovery with INDRA priors.
@@ -1016,6 +1021,8 @@ def run_bootstrap(
         potentially valid causal edges that might otherwise be excluded.
     n_bootstrap : int
         Number of bootstrap samples to generate for uncertainty quantification
+    convert_to_probability : bool
+        If True, convert INDRA evidence counts to edge probabilities using power law modeling
 
     Returns
     -------
@@ -1089,7 +1096,8 @@ def run_bootstrap(
         updated_indra_priors = indra_priors
 
     print("INFO: Calculating edge probabilities.")
-    edge_probabilities = prepare_indra_priors(updated_indra_priors)
+
+    edge_probabilities = prepare_indra_priors(updated_indra_priors, convert_to_probability)
 
     print("INFO: Running bootstrap.")
     bootstrap_dags = Parallel(n_jobs=-2)(
