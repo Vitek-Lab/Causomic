@@ -8,7 +8,7 @@ name = "causomic"
 version = "0.0.1-dev"
 description = "Python code for causal modeling of proteomics data."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.9"
+requires-python = "==3.11.*"
 
 authors = [
 	{ name = "Devon Kohler", email = "kohler.d@northeastern.edu" },
@@ -22,7 +22,7 @@ dependencies = [
 	"networkx",
 	"pandas",
 	"pyro-ppl==1.8.5",
-	"torch",
+	"torch==2.0.1",
 	"numpy",
 	"scipy",
 	"scikit-learn",
@@ -31,9 +31,13 @@ dependencies = [
 	"tqdm",
 	"seaborn",
 	"y0",
+	"indra @ git+https://github.com/gyorilab/indra.git",
+	"indra-cogex @ git+https://github.com/gyorilab/indra_cogex.git",
+	"protmapper",
 	"numpyro",
 	"jax",
 	"matplotlib",
+	"flask",
 	"namedlist",
 	"py3compat",
 	"python-dotenv",
@@ -45,12 +49,6 @@ Homepage = "https://github.com/devonjkohler/CausOmic"
 "Source Code" = "https://github.com/devonjkohler/CausOmic"
 
 [project.optional-dependencies]
-indra = [
-	"indra",
-	"indra-cogex",
-	"protmapper",
-]
-
 notears = [
 	"notears @ git+https://github.com/xunzheng/notears.git",
 ]
