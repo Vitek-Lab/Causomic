@@ -4,7 +4,7 @@
 
 # Causomic
 
-[![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Development Status](https://img.shields.io/badge/status-development-orange.svg)](https://github.com/devonjkohler/CausOmic)
 
@@ -73,8 +73,8 @@ The package is particularly useful for:
 ## Installation
 
 ### Prerequisites
-- Python 3.9 or higher
-- PyTorch
+- Python 3.11
+- PyTorch 2.0.1
 - Pyro-PPL
 
 ### Install from source
@@ -94,6 +94,8 @@ The main dependencies include:
 - `scipy` - Scientific computing and optimization
 - `scikit-learn` - Imputation, regression, and model utilities
 - `pgmpy` - Probabilistic graphical model structure learning
+- `indra` and `indra-cogex` - Prior biological network extraction (installed from GitHub)
+- `protmapper` - Identifier normalization for INDRA workflows
 - `numpyro` and `jax` - Alternate Bayesian backend support
 - `matplotlib` - Plotting
 - `seaborn` - Statistical visualization
@@ -102,7 +104,6 @@ The main dependencies include:
 - `y0` - Network analysis utilities
 
 Optional dependency:
-- `indra`, `indra-cogex`, and `protmapper` - Prior biological network extraction (`pip install "causomic[indra]"`)
 - `notears` - Continuous DAG structure learning (`pip install "causomic[notears]"`)
 
 ## Quick Start
