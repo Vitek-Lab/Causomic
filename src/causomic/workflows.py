@@ -173,7 +173,7 @@ def run_toxicity_detection_workflow(input_data,
     indra_prior = query_forward_paths(
         graph=indra_graph, 
         start_nodes=main_drug_targets, 
-        end_nodes=[dili_targets],
+        end_nodes=dili_targets,
         n_mediators=number_of_mediators,
         med_ev_filter=mediator_evidence_count_threshold,
     )
