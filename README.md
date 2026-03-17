@@ -130,12 +130,6 @@ from causomic.causal_model.LVM import LVM
 lvm = LVM(backend="pyro", num_steps=2000, verbose=True)
 lvm.fit(input_data, med_graph["causomic"])
 
-model = ProteomicPerturbationModel(
-    n_obs=len(data),
-    root_nodes=['target_protein'],
-    downstream_nodes=['downstream_protein1', 'downstream_protein2']
-)
-
 # 5. Make predictions
 intervention_value = 7.0
 lvm.intervention({"X": intervention_value}, "Z")
