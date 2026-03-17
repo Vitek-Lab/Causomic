@@ -91,8 +91,19 @@ The main dependencies include:
 - `networkx` - Graph manipulation
 - `pandas` - Data manipulation
 - `numpy` - Numerical computing
+- `scipy` - Scientific computing and optimization
+- `scikit-learn` - Imputation, regression, and model utilities
+- `pgmpy` - Probabilistic graphical model structure learning
+- `numpyro` and `jax` - Alternate Bayesian backend support
 - `matplotlib` - Plotting
+- `seaborn` - Statistical visualization
+- `tqdm` - Progress bars
+- `joblib` - Parallel execution
 - `y0` - Network analysis utilities
+
+Optional dependency:
+- `indra`, `indra-cogex`, and `protmapper` - Prior biological network extraction (`pip install "causomic[indra]"`)
+- `notears` - Continuous DAG structure learning (`pip install "causomic[notears]"`)
 
 ## Quick Start
 
