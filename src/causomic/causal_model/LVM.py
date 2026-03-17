@@ -835,7 +835,7 @@ class LVM:
 
         # Training loop with early stopping
         EMA_ALPHA = 0.05  # smoothing (0=no smoothing, 1=instant)
-        REL_MIN_DELTA = 0.002  # require 0.2% improvement vs best EMA
+        use_relative = False  # flip to True if you want relative threshold
 
         best_ema = float("inf")
         ema_loss = None
@@ -850,23 +850,36 @@ class LVM:
             if verbose and step % 100 == 0:
                 print(f"Step {step}: loss={loss:.4f}  ema={ema_loss:.4f}")
 
-            # Relative improvement check on EMA-smoothed loss
-            improved = ema_loss < best_ema * (1.0 - REL_MIN_DELTA)
+            if best_ema == float("inf"):
+                # first step
+                best_ema = ema_loss
+                continue
+
+            if use_relative:
+                # Relative improvement: min_delta interpreted as fraction, e.g. 0.002 = 0.2%
+                improved = ema_loss < best_ema * (1.0 - self.min_delta)
+            else:
+                # Absolute improvement: min_delta interpreted as absolute loss drop
+                improved = (best_ema - ema_loss) > self.min_delta
+
             if improved:
                 best_ema = ema_loss
                 steps_no_improve = 0
             else:
                 steps_no_improve += 1
 
-            # Early stopping condition
             if steps_no_improve >= self.patience:
                 if verbose:
-                    print(f"Early stopping at step {step} (best ema {best_ema:.4f})")
+                    print(
+                        f"Early stopping at step {step} "
+                        f"(best ema {best_ema:.4f}, "
+                        f"no improvement for {self.patience} steps)"
+                    )
                 break
 
         if verbose and steps_no_improve < self.patience:
             print(f"Training completed at step {self.num_steps} (best ema {best_ema:.4f})")
-
+            
         self.model = model
         self.guide = guide
 
@@ -898,7 +911,8 @@ class LVM:
             raise AttributeError("Model must be fitted before adding imputed values")
 
         # Convert data to long format for easier manipulation
-        long_data = pd.melt(self.input_data, var_name="protein", value_name="intensity")
+        long_data = pd.melt(self._from_z(self.input_data), 
+                            var_name="protein", value_name="intensity")
 
         # Replace zeros (used for missing values in model) with NaN
         long_data.loc[long_data["intensity"] == 0, "intensity"] = np.nan
@@ -935,8 +949,9 @@ class LVM:
                     imputed_values = imputation_long.loc[
                         imputation_long["protein"] == protein, "imp_loc"
                     ].values
-
-                    long_data.loc[mask, "imp_mean"] = imputed_values
+                    converted = self._from_z(
+                        pd.DataFrame(imputed_values, columns = [protein]))
+                    long_data.loc[mask, "imp_mean"] = converted[protein].values
 
         elif self.backend == "numpyro":
             if self.learned_params is None:
@@ -1355,7 +1370,7 @@ def main() -> None:
         med_graph["Networkx"],
         coefficients=med_graph["Coefficients"],
         add_error=False,
-        mnar_missing_param=[-3, 0.4],  # Missing not at random
+        mnar_missing_param=[-5, 0.4],  # Missing not at random
         add_feature_var=True,
         n=100,
         seed=2,

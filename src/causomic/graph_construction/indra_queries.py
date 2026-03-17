@@ -168,10 +168,10 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
     pd.DataFrame
         DataFrame with standardized columns:
         - source_id: Source entity identifier
-        - source_symbol: Human-readable source name
+        - source: Human-readable source name
         - relation: Relationship/statement type
         - target_id: Target entity identifier
-        - target_symbol: Human-readable target name
+        - target: Human-readable target name
         - stmt_hash: Unique statement hash (if available)
         - evidence_count: Number of supporting evidences
         - belief: Belief score (0-1, if available)
@@ -189,14 +189,14 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
     >>> statements = compound_query(compounds=compounds, client=client)
     >>> df = format_query_results(statements)
     >>> print(df.columns.tolist())
-    ['source_id', 'source_symbol', 'relation', 'target_id', 'target_symbol', ...]
+    ['source_id', 'source', 'relation', 'target_id', 'target', ...]
     """
     columns = [
         "source_id",
-        "source_symbol",
+        "source",
         "relation",
         "target_id",
-        "target_symbol",
+        "target",
         "stmt_hash",
         "evidence_count",
         "belief",
@@ -300,7 +300,7 @@ def pull_compound_data(compound_ids: List[str], client: Neo4jClient) -> pd.DataF
     >>> compounds = ["glucose", "CHEBI:15377", "caffeine"]
     >>> df = pull_compound_data(compounds, neo4j_client)
     >>> print(f"Found {len(df)} compound-gene interactions")
-    >>> print(df[['source_symbol', 'relation', 'target_symbol']].head())
+    >>> print(df[['source', 'relation', 'target']].head())
     """
     query_ids = get_ids(compound_ids, "chebi")
     query_results = compound_query(compounds=query_ids, client=client)
@@ -376,7 +376,7 @@ def pull_upstream_network(gene_ids: List[str], client: Neo4jClient) -> pd.DataFr
     >>> targets = ["BRCA1", "BRCA2", "ATM"]
     >>> upstream = pull_upstream_network(targets, neo4j_client)
     >>> print(f"Found {len(upstream)} upstream regulators")
-    >>> print(upstream.groupby('source_symbol').size().head())
+    >>> print(upstream.groupby('source').size().head())
 
     Notes
     -----
@@ -464,7 +464,7 @@ def pull_mesh_data(mesh_ids: List[str], client: Neo4jClient) -> pd.DataFrame:
     >>> diseases = ["D000544", "D001943", "D002292"]  # Alzheimer's, Breast Cancer, Cardiomyopathy
     >>> associations = pull_mesh_data(diseases, neo4j_client)
     >>> print(f"Found {len(associations)} gene-disease associations")
-    >>> top_genes = associations.groupby('source_symbol')['evidence_count'].sum().sort_values(ascending=False)
+    >>> top_genes = associations.groupby('source')['evidence_count'].sum().sort_values(ascending=False)
     >>> print("Top associated genes:", top_genes.head())
 
     Notes
@@ -492,8 +492,15 @@ def main():
                             auth=(os.getenv("USER"), 
                                 os.getenv("PASSWORD"))
                         )
-    gene_disease_df = pull_go_data(['0006915'], client)
-    print(gene_disease_df)
+    
+    trog_targets = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1']
+
+    dili_targets = ['ALB']
+
+    indra_prior = extract_indra_prior(
+        trog_targets, dili_targets, input_data_graph.columns, client,
+        one_step_evidence=1, two_step_evidence=1,
+        three_step_evidence=3, confounder_evidence=5000000)
     
 if __name__ == "__main__":
     main()

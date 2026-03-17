@@ -27,6 +27,7 @@ Dependencies:
 """
 
 import os
+import copy
 from collections import Counter
 
 import networkx as nx
@@ -286,6 +287,7 @@ def estimate_posterior_dag(
     add_high_corr_edges_to_priors: bool = False,
     corr_threshold: float = 0.95,
     edge_probability: float = 0.5,
+    convert_to_probability: bool = True,
 ) -> NxMixedGraph:
     """
     Estimate a posterior directed acyclic graph (DAG) using bootstrap sampling.
@@ -331,7 +333,10 @@ def estimate_posterior_dag(
     edge_probability : float, optional
         Minimum probability threshold for including edges in the final network.
         Edges appearing in fewer than this fraction of bootstrap samples are
-        excluded. Default is 0.9 (90% threshold).
+        excluded. Default is 0.5 (50% threshold).
+    
+    convert_to_probability : bool, optional
+        Whether to convert edge counts to probabilities before thresholding. Default is True.
 
     Returns
     -------
@@ -417,10 +422,12 @@ def estimate_posterior_dag(
         expert_knowledge,
         add_high_corr_edges_to_priors,
         corr_threshold,
+        n_bootstrap,
+        convert_to_probability,
     )
 
     # Run bootstrap sampling to generate multiple DAG hypotheses
-    bootstrap_dags = run_bootstrap(*model_input, n_bootstrap)
+    bootstrap_dags = run_bootstrap(*model_input)
 
     # Integrate bootstrap results into one final DAG using consensus approach
     posterior_dag = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=edge_probability)
@@ -449,12 +456,14 @@ def repair_confounding(
     it will add a bidirectional edge to indicate unresolved confounding.
     """
 
+    repaired_dag = copy.deepcopy(posterior_dag)
+
     # Identify relations with latent confounders
     knn_imputer = KNNImputer(n_neighbors=5)
     data = pd.DataFrame(knn_imputer.fit_transform(data), index=data.index, columns=data.columns)
 
     falsification_results = get_graph_falsifications(
-        posterior_dag,
+        repaired_dag,
         data,
         max_given=max_conditional,
         method="pearson",
@@ -528,7 +537,7 @@ def repair_confounding(
         tgt = Variable(res.get("target"))
         Z = res.get("Z")
         if res.get("add_latent") or Z is None:
-            # y0_graph.add_undirected_edge(src, tgt)
+            repaired_dag.add_undirected_edge(src, tgt)
             unrepaired_count += 1
             pass
         else:
@@ -536,18 +545,18 @@ def repair_confounding(
             # add nodes and directed edges from Z -> source and Z -> target
             for node in Z:
                 node = Variable(node)
-                if node not in posterior_dag.directed.nodes:
-                    posterior_dag.add_node(node)
+                if node not in repaired_dag.directed.nodes:
+                    repaired_dag.add_node(node)
                     new_nodes_added.add(str(node))
-                if ((node, src) not in posterior_dag.directed.edges) and (
-                    not nx.has_path(posterior_dag.directed, src, node)
+                if ((node, src) not in repaired_dag.directed.edges) and (
+                    not nx.has_path(repaired_dag.directed, src, node)
                 ):
-                    posterior_dag.add_directed_edge(node, src, directed=True)
+                    repaired_dag.add_directed_edge(node, src, directed=True)
                     new_edges_added += 1
-                if ((node, tgt) not in posterior_dag.directed.edges) and (
-                    not nx.has_path(posterior_dag.directed, tgt, node)
+                if ((node, tgt) not in repaired_dag.directed.edges) and (
+                    not nx.has_path(repaired_dag.directed, tgt, node)
                 ):
-                    posterior_dag.add_directed_edge(node, tgt, directed=True)
+                    repaired_dag.add_directed_edge(node, tgt, directed=True)
                     new_edges_added += 1
 
     # Print summary of confounding repair results
@@ -572,7 +581,7 @@ def repair_confounding(
     print(f"Repair success rate: {repair_rate:.1f}%")
     print("=" * 60 + "\n")
 
-    return posterior_dag
+    return repaired_dag
 
 
 def main():
@@ -589,97 +598,27 @@ def main():
     involving IGF and EGFR signaling pathways.
     """
 
-    # Define proteins of interest for pathway analysis
-    # source = ['PTGS2', 'PPARG', 'INS', 'ABCB11', 'CDKN1B',
-    #           'CDKN1A', 'CD36', 'ADIPOQ', 'TP53', 'TNF']
-    # target = ['ACTB', 'APOE', 'APOH', 'CAT', 'CLU', 'CTNNB1', 'CYP2A6',
-    #           'CYP3A4', 'DHRS7', 'FASN', 'GPD1', 'GSTM4', 'HAO2', 'HPX',
-    #           'IL18', 'KRT8', 'LAP3', 'MAT1A', 'NME2', 'PC', 'RDH13', 'SOD2', 'XYLB']
-    source = ["SERPINE1", "CYP3A4", "CTNNB1", "MAPK1"]
-    target = [
-        "ABCC2",
-        "ALB",
-        "CAT",
-        "CYP2C19",
-        "CYP2C9",
-        "CYP2E1",
-        "ENO1",
-        "GPT",
-        "GSR",
-        "GSTM1",
-        "GSTT1",
-        "HLA-A",
-        "HMOX1",
-        "HPD",
-        "KNG1",
-        "MTHFR",
-        "NAT2",
-        "SOD1",
-    ]
+    from indra_cogex.client import Neo4jClient
+    from sklearn.model_selection import train_test_split
 
-    input_data = pd.read_csv("data/model_input.csv")
+    client = Neo4jClient(url=os.getenv("API_URL"), 
+                            auth=(os.getenv("USER"), 
+                                os.getenv("PASSWORD"))
+                        )
+    
+    input_data = pd.read_csv("../../AstraZeneca_project/case_studies/compounds/model_input.csv")
 
-    source = np.intersect1d(source, input_data.columns)
-    target = np.intersect1d(target, input_data.columns)
+    input_data_graph, input_data_scm = train_test_split(
+        input_data, test_size=0.5, random_state=42)
+        
+    trog_targets = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1']
 
-    measured_proteins = input_data.columns.tolist()
+    dili_targets = ['ALB']
 
-    import pickle
-
-    file = "../../AstraZeneca_project/data/INDRA/indranet_dir_graph_fix_corr_weights.pkl"
-
-    # Replace 'file_path.pkl' with your actual file path
-    with open(file, "rb") as f:
-        graph = pickle.load(f)
-    print("Loaded INDRA graph from pickle file.")
-    from causomic.graph_construction.utils_nx import prepare_graph, query_forward_paths
-
-    hgnc_graph = prepare_graph(
-        graph, measured_proteins, ["HGNC"], ["IncreaseAmount", "DecreaseAmount"]
-    )
-
-    # Build a mapping: old_name -> new_name (replace '-' with '')
-    mapping = {node: node.replace("-", "") for node in hgnc_graph.nodes()}
-
-    # Relabel nodes
-    hgnc_graph = nx.relabel_nodes(hgnc_graph, mapping)
-
-    indra_prior = query_forward_paths(
-        graph=hgnc_graph,
-        start_nodes=source,
-        end_nodes=target,
-        n_mediators=2,
-        med_ev_filter=[1, 1, 3],
-    )
-
-    print("Extracted prior network from INDRA graph.")
-
-    input_data = input_data.loc[:, measured_proteins]
-
-    # Filter input_data_graph to only include columns (nodes) present in indra_prior
-    indra_prior["source"] = indra_prior["source"].str.replace("-", "")
-    indra_prior["target"] = indra_prior["target"].str.replace("-", "")
-
-    indra_nodes = pd.unique(indra_prior[["source", "target"]].values.ravel())
-
-    input_data.columns = input_data.columns.str.replace("-", "")
-    input_data = input_data.loc[:, input_data.columns.str.replace("-", "").isin(indra_nodes)]
-
-    posterior_network = estimate_posterior_dag(
-        input_data, indra_prior, 5, BICGaussIndraPriors, SparseHillClimb, 100, False, 0.9, 0.5
-    )
-    print(len(posterior_network))
-    print("Estimated posterior network.")
-    posterior_network = repair_confounding(
-        input_data, posterior_network, hgnc_graph, max_conditional=2
-    )
-
-    print(posterior_network)
-    # Note: Additional steps would typically include:
-    # - Loading observational data
-    # - Running estimate_posterior_dag with the extracted priors
-    # - Analyzing and visualizing the resulting network
-
-
+    indra_prior = extract_indra_prior(
+        trog_targets, dili_targets, input_data_graph.columns, client,
+        one_step_evidence=1, two_step_evidence=1,
+        three_step_evidence=3, confounder_evidence=5000000)
+    
 if __name__ == "__main__":
     main()

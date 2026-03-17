@@ -235,7 +235,8 @@ def imputation(data: pd.DataFrame) -> pd.DataFrame:
 
     # Combine predictors with target variable
     model_data = pd.concat(
-        [run_dummies, feature_dummies, keep_data["Intensity"].reset_index(drop=True)], axis=1
+        [run_dummies, feature_dummies, keep_data["Intensity"]], 
+        axis=1
     )
 
     # Split into training (non-missing) and prediction (missing) sets
