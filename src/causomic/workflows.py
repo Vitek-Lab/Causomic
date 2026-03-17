@@ -14,42 +14,9 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from causomic.graph_construction.utils_nx import query_forward_paths
-from causomic.graph_construction.indra_queries import pull_compound_data, pull_mesh_data
+from causomic.graph_construction.utils_nx import query_effect_nodes, query_forward_paths, query_drug_targets
 from causomic.graph_construction.prior_data_reconciliation import BICGaussIndraPriors, SparseHillClimb
 from causomic.network import estimate_posterior_dag, repair_confounding
-
-from indra_cogex.client import Neo4jClient
-from indra.databases import uniprot_client, hgnc_client
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# TODO: Add workflow to use either local or Neo4j version of INDRA
-client = Neo4jClient(url=os.getenv("API_URL"), auth=("neo4j", os.getenv("PASSWORD") or ""))
-
-def uniprot_to_hgnc_name(uniprot_mnemonic):
-    """Get an HGNC ID from a UniProt mnemonic."""
-    uniprot_id = uniprot_client.get_id_from_mnemonic(uniprot_mnemonic)
-    if uniprot_id:
-        return uniprot_client.get_gene_name(uniprot_id)
-    else:
-        return None
-    
-def prepare_data(input_data: pd.DataFrame, drug_name: str, missing_threshold: float = 0.5) -> pd.DataFrame:
-    """Prepare input data for graph estimation by filtering to nodes in the INDRA graph."""
-    
-    input_data['Protein'] = input_data['Protein'].apply(lambda x: uniprot_to_hgnc_name(x))
-    input_data = input_data.drop_duplicates(subset=["Protein", "SUBJECT"]) 
-    input_data = input_data.loc[input_data['Protein'].notnull()] 
-    input_data = input_data.loc[-input_data["GROUP"].str.contains(drug_name)]
-    
-    input_data = input_data.pivot(index="SUBJECT", columns="Protein", values="LogIntensities")
-    missing_percentage = input_data.isnull().mean()
-    input_data = input_data.loc[:, missing_percentage[missing_percentage < missing_threshold].index]
-    
-    return input_data
 
 def _graph_counts(graph_like: Any) -> Tuple[Optional[int], Optional[int], Optional[Tuple[int, int]]]:
     """Return graph node/edge counts for supported graph-like objects."""
@@ -174,30 +141,27 @@ def run_toxicity_detection_workflow(input_data,
     measured_proteins = input_data.columns.tolist()
     
     # Randomly split input_data into two equal parts
-    input_data_graph, _ = train_test_split(input_data, test_size=0.5, random_state=42)
+    # input_data_graph, _ = train_test_split(input_data, test_size=0.5, random_state=42)
+    input_data_graph = input_data.copy()
     
-    main_drug_targets = pull_compound_data(drug_name, client)
+    # Extra drug targets
+    main_drug_targets = query_drug_targets(indra_graph, 
+                       drug_name,
+                       target_ev_filter = drug_target_evidence_count_threshold)
     main_drug_targets = main_drug_targets.loc[
-        (
-            main_drug_targets["relation"].isin(
-                ["Inhibition", "DecreaseAmount", "Activation", "IncreaseAmount"]
-            )
-            & (main_drug_targets["target"].isin(measured_proteins))
-        )
-    ].groupby("target")["evidence_count"].sum().reset_index()
-    main_drug_targets = main_drug_targets.loc[
-        main_drug_targets["evidence_count"] >= drug_target_evidence_count_threshold,
-        "target",
-    ].to_list()
+        (main_drug_targets["target"].isin(measured_proteins))
+    ].drop_duplicates()["target"].values
+    
     if not main_drug_targets:
         raise ValueError(f"No drug targets found for {drug_name} with evidence count >= {drug_target_evidence_count_threshold}")
 
-
-    dili_targets = pull_mesh_data(["D056486"], client)
+    # Extract DILI nodes
+    dili_targets = query_effect_nodes(
+        indra_graph,
+        "Chemical and Drug Induced Liver Injury",
+        target_ev_filter = dili_target_evidence_count_threshold)
     dili_targets = dili_targets[
-        (dili_targets["relation"] == "gene_disease_association")
-        & (dili_targets["evidence_count"] >= dili_target_evidence_count_threshold)
-        & (dili_targets["source"].isin(measured_proteins))
+        (dili_targets["source"].isin(measured_proteins))
     ].drop_duplicates()["source"].values
 
     mapping = {node: node.replace("-", "") for node in indra_graph.nodes()}

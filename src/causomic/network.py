@@ -44,7 +44,7 @@ from y0.algorithm.falsification import get_graph_falsifications
 from y0.dsl import Variable
 from y0.graph import NxMixedGraph
 
-from causomic.graph_construction.indra_queries import format_query_results, get_ids
+from causomic.graph_construction.neo4j_indra_queries import format_query_results, get_ids
 from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     SparseHillClimb,
@@ -52,7 +52,7 @@ from causomic.graph_construction.prior_data_reconciliation import (
     run_bootstrap,
 )
 from causomic.graph_construction.repair import convert_to_y0_graph, process_failed_test
-from causomic.graph_construction.utils import (
+from causomic.graph_construction.utils_neo4j import (
     get_one_step_root_down,
     get_three_step_root,
     get_two_step_root_known_med,
