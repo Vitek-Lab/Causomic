@@ -40,7 +40,7 @@ def uniprot_to_hgnc_name(uniprot_mnemonic):
 def prepare_data(input_data: pd.DataFrame, drug_name: str, missing_threshold: float = 0.5) -> pd.DataFrame:
     """Prepare input data for graph estimation by filtering to nodes in the INDRA graph."""
     
-    input_df['Protein'] = input_df['Protein'].apply(lambda x: uniprot_to_hgnc_name(x))
+    input_data['Protein'] = input_data['Protein'].apply(lambda x: uniprot_to_hgnc_name(x))
     input_data = input_data.drop_duplicates(subset=["Protein", "SUBJECT"]) 
     input_data = input_data.loc[input_data['Protein'].notnull()] 
     input_data = input_data.loc[-input_data["GROUP"].str.contains(drug_name)]

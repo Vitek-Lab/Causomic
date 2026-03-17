@@ -4,7 +4,11 @@ import networkx as nx
 from pgmpy.estimators import PC, HillClimbSearch
 from sklearn.preprocessing import StandardScaler
 from typing import List, Optional, Tuple
-from notears.linear import notears_linear
+
+try:
+    from notears.linear import notears_linear  # type: ignore[import-not-found]
+except ImportError:
+    notears_linear = None
 
 def _model_to_nx(model) -> nx.DiGraph:
     """Convert a pgmpy DAG/PDAG/BayesianModel to a DiGraph."""
@@ -91,6 +95,11 @@ def fit_notears(
     G : nx.DiGraph
     W : np.ndarray, shape (p, p), weights from NOTEARS
     """
+    if notears_linear is None:
+        raise ImportError(
+            "NOTEARS support is optional. Install it with `pip install 'causomic[notears]'`."
+        )
+
     X = np.asarray(df, dtype=float)
     if standardize:
         X = _standardize(X)

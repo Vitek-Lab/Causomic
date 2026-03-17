@@ -24,14 +24,36 @@ dependencies = [
 	"pyro-ppl==1.8.5",
 	"torch",
 	"numpy",
+	"scipy",
+	"scikit-learn",
+	"pgmpy",
+	"joblib",
+	"tqdm",
+	"seaborn",
 	"y0",
+	"numpyro",
+	"jax",
 	"matplotlib",
 	"namedlist",
 	"py3compat",
 	"python-dotenv",
 ]
 
-urls = { "Homepage" = "https://github.com/devonjkohler/CausOmic", "Bug Tracker" = "https://github.com/devonjkohler/CausOmic/issues", "Source Code" = "https://github.com/devonjkohler/CausOmic" }
+[project.urls]
+Homepage = "https://github.com/devonjkohler/CausOmic"
+"Bug Tracker" = "https://github.com/devonjkohler/CausOmic/issues"
+"Source Code" = "https://github.com/devonjkohler/CausOmic"
+
+[project.optional-dependencies]
+indra = [
+	"indra",
+	"indra-cogex",
+	"protmapper",
+]
+
+notears = [
+	"notears @ git+https://github.com/xunzheng/notears.git",
+]
 
 [tool.setuptools]
 include-package-data = true
