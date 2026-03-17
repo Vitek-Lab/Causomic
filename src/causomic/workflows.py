@@ -152,7 +152,7 @@ def run_toxicity_detection_workflow(input_data,
         (main_drug_targets["target"].isin(measured_proteins))
     ].drop_duplicates()["target"].values
     
-    if not main_drug_targets:
+    if len(main_drug_targets) == 0:
         raise ValueError(f"No drug targets found for {drug_name} with evidence count >= {drug_target_evidence_count_threshold}")
 
     # Extract DILI nodes
