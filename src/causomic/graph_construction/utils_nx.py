@@ -347,7 +347,7 @@ def query_drug_targets(graph: nx.DiGraph,
     result_df = result_df.groupby(["source", "target"], as_index=False).agg(
         {"evidence_count": "sum", "source_count": "sum"}
     )
-    return result_df    
+    return result_df
 
 def query_effect_nodes(
     graph: nx.DiGraph,
