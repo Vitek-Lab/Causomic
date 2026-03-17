@@ -38,7 +38,7 @@ from indra_cogex.client import Neo4jClient
 from indra_cogex.representation import norm_id
 
 # Local imports
-from causomic.graph_construction.utils import get_neighbor_network
+from causomic.graph_construction.utils_neo4j import get_neighbor_network
 
 # Load environment variables
 load_dotenv()

@@ -296,6 +296,113 @@ def filtered_paths(
     # works for Graph/DiGraph/Multi(Di)Graph (paths are node sequences)
     yield from nx.all_simple_paths(view, source, target, cutoff=cutoff)
 
+def query_drug_targets(graph: nx.DiGraph, 
+                       drug: str,
+                       target_ev_filter: int = 1) -> pd.DataFrame:
+    
+    """
+    Query drug targets from a directed graph and return aggregated evidence data.
+    This function retrieves all direct targets of a given drug from a NetworkX directed graph,
+    filters them based on a minimum evidence threshold, and returns a consolidated DataFrame
+    with aggregated evidence counts and source counts.
+    Args:
+        graph (nx.DiGraph): A NetworkX directed graph where nodes represent drugs/targets
+            and edges contain evidence metadata.
+        drug (str): The drug node identifier to query targets for.
+        target_ev_filter (int, optional): Minimum total evidence count required for a target
+            to be included in results. Defaults to 1.
+    Returns:
+        pd.DataFrame: A DataFrame containing:
+            - source: The drug identifier (str)
+            - target: The target identifier (str)
+            - evidence_count: Total aggregated evidence count (int)
+            - source_count: Total aggregated source count (int)
+            Rows are grouped by source-target pairs with summed evidence metrics.
+    Raises:
+        nx.NodeNotFound: If the drug node does not exist in the graph.
+    Notes:
+        - Edge data is expected to have an 'evidence' dictionary with keys 'total_evidence'
+            and 'source_evidence'.
+        - Missing or malformed evidence data defaults to 0.
+        - Results are aggregated by unique source-target pairs.
+    """
+    
+    edges_list: List[tuple] = []
+    for successor in graph.successors(drug):
+        edge = graph[drug][successor]
+        ev = edge.get("evidence", {}).get("total_evidence", 0)
+        if ev >= target_ev_filter:
+            edges_list.append(
+                (
+                    drug,
+                    successor,
+                    edge["evidence"]["total_evidence"],
+                    edge["evidence"]["source_evidence"],
+                )
+            )
+    
+    result_df = pd.DataFrame(
+        edges_list, columns=["source", "target", "evidence_count", "source_count"]
+    )
+    result_df = result_df.groupby(["source", "target"], as_index=False).agg(
+        {"evidence_count": "sum", "source_count": "sum"}
+    )
+    return result_df    
+
+def query_effect_nodes(
+    graph: nx.DiGraph,
+    effect: str,
+    target_ev_filter: int = 1) -> pd.DataFrame:
+    
+    """
+    Query effect nodes from a directed graph and return aggregated evidence data.
+    This function retrieves all direct predecessors of a given effect node from a NetworkX directed graph,
+    filters them based on a minimum evidence threshold, and returns a consolidated DataFrame
+    with aggregated evidence counts and source counts.
+    Args:
+        graph (nx.DiGraph): A NetworkX directed graph where nodes represent effects
+            and edges contain evidence metadata.
+        effect (str): The effect node identifier to query predecessors for.
+        target_ev_filter (int, optional): Minimum total evidence count required for a predecessor
+            to be included in results. Defaults to 1.
+    Returns:
+        pd.DataFrame: A DataFrame containing:
+            - source: The predecessor identifier (str)
+            - target: The effect identifier (str)
+            - evidence_count: Total aggregated evidence count (int)
+            - source_count: Total aggregated source count (int)
+            Rows are grouped by source-target pairs with summed evidence metrics.
+    Raises:
+        nx.NodeNotFound: If the effect node does not exist in the graph.
+    Notes:
+        - Edge data is expected to have an 'evidence' dictionary with keys 'total_evidence'
+            and 'source_evidence'.
+        - Missing or malformed evidence data defaults to 0.
+        - Results are aggregated by unique source-target pairs.
+    """
+
+    edges_list: List[tuple] = []
+    for predecessor in graph.predecessors(effect):
+        edge = graph[predecessor][effect]
+        ev = edge.get("evidence", {}).get("total_evidence", 0)
+        if ev >= target_ev_filter:
+            edges_list.append(
+                (
+                    predecessor,
+                    effect,
+                    edge["evidence"]["total_evidence"],
+                    edge["evidence"]["source_evidence"],
+                )
+            )
+
+    result_df = pd.DataFrame(
+        edges_list, columns=["source", "target", "evidence_count", "source_count"]
+    )
+    result_df = result_df.groupby(["source", "target"], as_index=False).agg(
+        {"evidence_count": "sum", "source_count": "sum"}
+    )
+    return result_df
+    
 
 def query_forward_paths(
     graph: nx.DiGraph,
