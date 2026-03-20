@@ -23,7 +23,7 @@ dependencies = [
 	"pandas",
 	"pyro-ppl==1.8.5",
 	"torch==2.0.1",
-	"numpy",
+	"numpy<2",
 	"scipy",
 	"scikit-learn",
 	"pgmpy",
