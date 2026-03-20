@@ -191,7 +191,7 @@ def run_toxicity_detection_workflow(input_data,
         indra_prior,
         5,
         BICGaussIndraPriors, SparseHillClimb,
-        500, False, .5, .5,
+        100, False, .5, .5,
     )
     _log_graph_step("posterior_network", posterior_network, log_file, drug_name=drug_name)
     

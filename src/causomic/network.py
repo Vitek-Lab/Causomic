@@ -444,6 +444,7 @@ def repair_confounding(
     posterior_dag: NxMixedGraph,
     indra_graph: nx.DiGraph,
     max_conditional: int = 2,
+    n_jobs: int = 1,
     confounder_evidence: int = 1,
 ) -> NxMixedGraph:
     """
@@ -466,6 +467,7 @@ def repair_confounding(
         repaired_dag,
         data,
         max_given=max_conditional,
+        n_jobs=n_jobs,
         method="pearson",
         verbose=True,
         significance_level=0.05,
@@ -507,7 +509,7 @@ def repair_confounding(
     print(f"Processing {n} failed tests for confounding repair...")
 
     # Use process-based parallelism with tqdm progress reporting
-    results = Parallel(n_jobs=-2)(
+    results = Parallel(n_jobs=n_jobs)(
         delayed(process_failed_test)(
             failed_tests.loc[i], confounder_relations, data, max_conditional
         )
