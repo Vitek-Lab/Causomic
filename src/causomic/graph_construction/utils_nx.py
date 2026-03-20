@@ -79,6 +79,7 @@ def add_evidence_info(graph: nx.DiGraph) -> nx.DiGraph:
         statements (missing/None treated as 0)
       - ``source_evidence``: number of distinct source keys found in the
         statements' ``source_counts`` dicts
+      - ``stmt_type``: list of unique statement types found on the edge
 
     Args:
         graph: DiGraph with edge attribute "statements" containing dicts
@@ -103,10 +104,17 @@ def add_evidence_info(graph: nx.DiGraph) -> nx.DiGraph:
         )
         source_keys = len(source_key_union)
 
+        # unique statement types across statements
+        stmt_types = list(set(
+            s.get("stmt_type") for s in stmts 
+            if s.get("stmt_type") is not None
+        ))
+
         # attach a fresh dict per edge (do not reuse mutable objects)
-        new_ev: Dict[str, int] = {
+        new_ev: Dict[str, Any] = {
             "total_evidence": total_evidence,
             "source_evidence": source_keys,
+            "stmt_type": stmt_types,
         }
         graph[u][v]["evidence"] = new_ev
 
