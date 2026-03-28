@@ -90,3 +90,32 @@ def test_filtered_paths_and_query_forward_paths():
     fwd = utils_nx.query_forward_paths(G, start_nodes=["A"], end_nodes=["C"], n_mediators=2, med_ev_filter=[1, 1, 1])
     assert isinstance(fwd, pd.DataFrame)
     assert set(["source", "target"]).issubset(fwd.columns)
+
+
+def test_query_forward_paths_counts_mediators_not_edges():
+    G = nx.DiGraph()
+    G.add_edges_from([
+        ("A", "B", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
+        ("B", "C", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
+    ])
+
+    direct_only = utils_nx.query_forward_paths(
+        G,
+        start_nodes=["A"],
+        end_nodes=["C"],
+        n_mediators=0,
+        med_ev_filter=[1],
+    )
+    assert direct_only.empty
+
+    one_mediator = utils_nx.query_forward_paths(
+        G,
+        start_nodes=["A"],
+        end_nodes=["C"],
+        n_mediators=1,
+        med_ev_filter=[1, 1],
+    )
+    assert set(zip(one_mediator["source"], one_mediator["target"])) == {
+        ("A", "B"),
+        ("B", "C"),
+    }

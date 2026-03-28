@@ -422,16 +422,19 @@ def query_forward_paths(
     """Search for simple forward paths from any start node to any end node.
 
     For each mediator depth from 0..n_mediators the function will collect
-    paths of length equal to the mediator count (i.e., number of edges)
-    subject to the corresponding evidence threshold in ``med_ev_filter``.
+    paths with exactly that many intermediate nodes between the start and
+    end nodes. This corresponds to path lengths of ``mediator_count + 1``
+    edges, subject to the corresponding evidence threshold in
+    ``med_ev_filter``.
 
     Args:
         graph: DiGraph annotated with evidence counts on edges.
         start_nodes: Iterable of starting node ids.
         end_nodes: Iterable of target node ids.
-        n_mediators: Maximum number of mediators (i.e., path length in edges).
+        n_mediators: Maximum number of mediator nodes between start and end.
         med_ev_filter: Optional list of integer thresholds with length
-            ``n_mediators + 1``. If None, defaults to all ones.
+            ``n_mediators + 1`` where index ``i`` applies to paths with
+            ``i`` mediators. If None, defaults to all ones.
 
     Returns:
         A pandas.DataFrame with rows for each edge that appears on any
@@ -442,6 +445,9 @@ def query_forward_paths(
     if med_ev_filter is None:
         med_ev_filter = [1] * (n_mediators + 1)
 
+    if n_mediators < 0:
+        raise ValueError("n_mediators must be non-negative")
+
     if len(med_ev_filter) != (n_mediators + 1):
         raise ValueError("med_ev_filter must have length n_mediators + 1")
 
@@ -451,7 +457,13 @@ def query_forward_paths(
             for med in range(0, n_mediators + 1):
                 thr = med_ev_filter[med]
                 all_paths = list(
-                    filtered_paths(graph, source=start, target=end, cutoff=med, thr=thr)
+                    filtered_paths(
+                        graph,
+                        source=start,
+                        target=end,
+                        cutoff=med + 1,
+                        thr=thr,
+                    )
                 )
                 if all_paths:
                     paths.extend(all_paths)
