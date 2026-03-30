@@ -16,60 +16,6 @@ import pandas as pd
 from tqdm import tqdm
 
 
-def filter_graph_by_stmt_types(graph: nx.DiGraph, stmt_types: Iterable[str]) -> nx.DiGraph:
-    """Return a new DiGraph that contains only edges whose statements
-    include at least one statement with a type in ``stmt_types``.
-
-    The returned graph is a shallow copy: node attributes are copied, and
-    edges keep their attributes except that the ``statements`` list is
-    filtered to only include statements with matching ``stmt_type``.
-
-    Args:
-        graph: Input directed graph with edge attribute "statements" that
-            contains iterable items (typically dicts) describing INDRA
-            statements.
-        stmt_types: Iterable of statement type strings to keep (e.g.
-            "IncreaseAmount", "DecreaseAmount").
-
-    Returns:
-        A new :class:`networkx.DiGraph` containing only the matching edges
-        and their incident nodes.
-    """
-
-    stmt_types_set = set(stmt_types)
-
-    # choose edges where any statement has a stmt_type in the requested set
-    edges_keep = [
-        (u, v)
-        for u, v, attrs in graph.edges(data=True)
-        if any(
-            isinstance(stmt, dict) and stmt.get("stmt_type") in stmt_types_set
-            for stmt in attrs.get("statements", [])
-        )
-    ]
-
-    # build a new graph containing only the kept edges and with statements filtered
-    new_g = nx.DiGraph()
-    for u, v in edges_keep:
-        # copy nodes (including their attributes) if not already present
-        if not new_g.has_node(u):
-            new_g.add_node(u, **graph.nodes[u])
-        if not new_g.has_node(v):
-            new_g.add_node(v, **graph.nodes[v])
-
-        # shallow copy edge attributes and filter the statements list
-        attrs: Dict[str, Any] = dict(graph[u][v])
-        filtered_statements = [
-            stmt
-            for stmt in attrs.get("statements", [])
-            if isinstance(stmt, dict) and stmt.get("stmt_type") in stmt_types_set
-        ]
-        attrs["statements"] = filtered_statements
-        new_g.add_edge(u, v, **attrs)
-
-    return new_g
-
-
 def add_evidence_info(graph: nx.DiGraph) -> nx.DiGraph:
     """Compute and attach simple evidence summaries to every edge.
 
@@ -147,28 +93,6 @@ def filter_graph_by_evidence_count(graph: nx.DiGraph, evidence_count: int) -> nx
 
     return filtered_graph
 
-
-def filter_graph_by_measured_nodes(graph: nx.DiGraph, measured_nodes: List[str]) -> nx.DiGraph:
-    """Return a subgraph containing only edges where both endpoints are in
-    ``measured_nodes``.
-
-    Args:
-        graph: DiGraph to filter.
-        measured_nodes: Sequence of node identifiers considered 'measured'.
-
-    Returns:
-        A new DiGraph induced by edges connecting only measured nodes.
-    """
-
-    edges_to_keep: List[tuple] = [
-        (u, v) for u, v in graph.edges() if u in measured_nodes and v in measured_nodes
-    ]
-
-    filtered_graph = graph.edge_subgraph(edges_to_keep).copy()
-
-    return filtered_graph
-
-
 def prepare_graph(
     graph: nx.DiGraph,
     measured_nodes: List[str],
@@ -195,17 +119,61 @@ def prepare_graph(
         A prepared :class:`networkx.DiGraph` suitable for path queries and
         downstream processing.
     """
+    allowed_node_types = set(node_types)
+    measured_node_set = set(measured_nodes)
+    allowed_stmt_types = set(stmt_types)
 
-    # keep only nodes with ns in requested node_types
-    subgraph = graph.subgraph(
-        [n for n, attrs in graph.nodes(data=True) if attrs.get("ns") in node_types]
-    ).copy()
+    prepared_graph = nx.DiGraph()
+    node_attrs = graph.nodes
 
-    subgraph = filter_graph_by_measured_nodes(subgraph, measured_nodes)
-    subgraph = filter_graph_by_stmt_types(subgraph, stmt_types)
-    subgraph = add_evidence_info(subgraph)
+    for u, v, attrs in graph.edges(data=True):
+        if u not in measured_node_set or v not in measured_node_set:
+            continue
+        if node_attrs[u].get("ns") not in allowed_node_types:
+            continue
+        if node_attrs[v].get("ns") not in allowed_node_types:
+            continue
 
-    return subgraph
+        stmts = attrs.get("statements", [])
+        filtered_statements = []
+        total_evidence = 0
+        source_key_union = set()
+        stmt_type_union = set()
+
+        for stmt in stmts:
+            if not isinstance(stmt, dict):
+                continue
+
+            stmt_type = stmt.get("stmt_type")
+            if stmt_type not in allowed_stmt_types:
+                continue
+
+            filtered_statements.append(stmt)
+            total_evidence += int(stmt.get("evidence_count") or 0)
+            stmt_type_union.add(stmt_type)
+
+            source_counts = stmt.get("source_counts")
+            if isinstance(source_counts, dict):
+                source_key_union.update(source_counts.keys())
+
+        if not filtered_statements:
+            continue
+
+        if not prepared_graph.has_node(u):
+            prepared_graph.add_node(u, **node_attrs[u])
+        if not prepared_graph.has_node(v):
+            prepared_graph.add_node(v, **node_attrs[v])
+
+        edge_attrs: Dict[str, Any] = dict(attrs)
+        edge_attrs["statements"] = filtered_statements
+        edge_attrs["evidence"] = {
+            "total_evidence": total_evidence,
+            "source_evidence": len(source_key_union),
+            "stmt_type": list(stmt_type_union),
+        }
+        prepared_graph.add_edge(u, v, **edge_attrs)
+
+    return prepared_graph
 
 
 def query_confounders(
