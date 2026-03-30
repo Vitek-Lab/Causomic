@@ -95,33 +95,36 @@ def filter_graph_by_evidence_count(graph: nx.DiGraph, evidence_count: int) -> nx
 
 def prepare_graph(
     graph: nx.DiGraph,
-    measured_nodes: List[str],
-    node_types: List[str],
-    stmt_types: List[str],
+    measured_nodes: Optional[List[str]] = None,
+    node_types: Optional[List[str]] = None,
+    stmt_types: Optional[List[str]] = None,
 ) -> nx.DiGraph:
     """Prepare a graph for analysis by selecting node namespace, measured
     nodes, and statement types.
 
     Steps applied (in order):
       1. Keep only nodes whose ``ns`` attribute is in ``node_types``.
-      2. Restrict edges to those connecting measured nodes.
+      2. If provided, restrict edges to those connecting measured nodes.
       3. Filter edges to only include statements with ``stmt_types``.
       4. Annotate edges with evidence summary using :func:`add_evidence_info`.
 
     Args:
         graph: Original DIgraph produced by INDRA/other pipeline.
-        measured_nodes: List of nodes that were measured (e.g., columns of
-            an input dataset).
-        node_types: Allowed node namespace types (e.g., ["HGNC"]).
-        stmt_types: Allowed statement types to keep on edges.
+        measured_nodes: Optional list of nodes that were measured (e.g.,
+            columns of an input dataset). If omitted, no measured-node
+            filtering is applied.
+        node_types: Allowed node namespace types (e.g., ["HGNC"]). If
+            omitted, all node namespaces are allowed.
+        stmt_types: Allowed statement types to keep on edges. If omitted,
+            all statement types are allowed.
 
     Returns:
         A prepared :class:`networkx.DiGraph` suitable for path queries and
         downstream processing.
     """
-    allowed_node_types = set(node_types)
-    measured_node_set = set(measured_nodes)
-    allowed_stmt_types = set(stmt_types)
+    allowed_node_types = set(node_types) if node_types is not None else None
+    measured_node_set = set(measured_nodes) if measured_nodes is not None else None
+    allowed_stmt_types = set(stmt_types) if stmt_types is not None else None
 
     prepared_graph = nx.DiGraph()
     node_attrs = graph.nodes
@@ -131,11 +134,11 @@ def prepare_graph(
         total=graph.number_of_edges(),
         desc="Preparing graph",
     ):
-        if u not in measured_node_set or v not in measured_node_set:
+        if measured_node_set is not None and (u not in measured_node_set or v not in measured_node_set):
             continue
-        if node_attrs[u].get("ns") not in allowed_node_types:
+        if allowed_node_types is not None and node_attrs[u].get("ns") not in allowed_node_types:
             continue
-        if node_attrs[v].get("ns") not in allowed_node_types:
+        if allowed_node_types is not None and node_attrs[v].get("ns") not in allowed_node_types:
             continue
 
         stmts = attrs.get("statements", [])
@@ -149,7 +152,7 @@ def prepare_graph(
                 continue
 
             stmt_type = stmt.get("stmt_type")
-            if stmt_type not in allowed_stmt_types:
+            if allowed_stmt_types is not None and stmt_type not in allowed_stmt_types:
                 continue
 
             filtered_statements.append(stmt)
