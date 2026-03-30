@@ -22,17 +22,19 @@ def make_sample_graph():
     return G
 
 
-def test_filter_graph_by_stmt_types_and_statement_filtering():
+def test_prepare_graph_filters_statements_and_builds_evidence():
     G = make_sample_graph()
-    # keep only IncreaseAmount statements
-    out = utils_nx.filter_graph_by_stmt_types(G, ["IncreaseAmount"])
-    assert out.number_of_nodes() >= 2
-    # only edge n1->n2 should remain
+    out = utils_nx.prepare_graph(
+        G,
+        measured_nodes=["n1", "n2", "n3", "n4"],
+        node_types=["HGNC"],
+        stmt_types=["IncreaseAmount"],
+    )
     assert out.has_edge("n1", "n2")
     assert not out.has_edge("n2", "n3")
-    # statements list filtered
     stmts = out["n1"]["n2"]["statements"]
     assert all(s.get("stmt_type") == "IncreaseAmount" for s in stmts)
+    assert out["n1"]["n2"]["evidence"]["total_evidence"] == 2
 
 
 def test_add_evidence_info_and_filter_by_evidence_count():
@@ -49,17 +51,16 @@ def test_add_evidence_info_and_filter_by_evidence_count():
     assert f.has_edge("n2", "n3")
 
 
-def test_filter_graph_by_measured_nodes_and_prepare_graph():
+def test_prepare_graph_filters_measured_nodes():
     G = make_sample_graph()
-    measured = ["n1", "n2"]
-    sub = utils_nx.filter_graph_by_measured_nodes(G, measured)
-    assert sub.number_of_edges() == 1
-
-    # prepare_graph should run without error (uses node ns attr and stmt types)
-    G2 = make_sample_graph()
-    prepared = utils_nx.prepare_graph(G2, measured_nodes=["n1", "n2", "n3", "n4"], node_types=["HGNC"], stmt_types=["IncreaseAmount", "DecreaseAmount", "OtherType"])  # noqa: E501
-    # evidence attribute should be present after prepare_graph
-    assert prepared.edges(data=True)
+    prepared = utils_nx.prepare_graph(
+        G,
+        measured_nodes=["n1", "n2"],
+        node_types=["HGNC"],
+        stmt_types=["IncreaseAmount", "DecreaseAmount", "OtherType"],
+    )
+    assert prepared.number_of_edges() == 1
+    assert prepared.has_edge("n1", "n2")
 
 
 def test_query_confounders_returns_dataframe():
