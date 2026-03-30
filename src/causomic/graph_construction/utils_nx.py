@@ -126,7 +126,11 @@ def prepare_graph(
     prepared_graph = nx.DiGraph()
     node_attrs = graph.nodes
 
-    for u, v, attrs in graph.edges(data=True):
+    for u, v, attrs in tqdm(
+        graph.edges(data=True),
+        total=graph.number_of_edges(),
+        desc="Preparing graph",
+    ):
         if u not in measured_node_set or v not in measured_node_set:
             continue
         if node_attrs[u].get("ns") not in allowed_node_types:
@@ -443,11 +447,15 @@ def query_forward_paths(
             u, v = path[i], path[i + 1]
             edge = graph[u][v]
             forward_edge_list.append(
-                (u, v, edge["evidence"]["total_evidence"], edge["evidence"]["source_evidence"])
+                (u, v, 
+                 edge["evidence"]["total_evidence"], 
+                 edge["evidence"]["source_evidence"],
+                 edge["evidence"]["stmt_type"])
             )
 
     forward_df = pd.DataFrame(
-        forward_edge_list, columns=["source", "target", "evidence_count", "source_count"]
+        forward_edge_list, columns=["source", "target", "evidence_count", 
+                                    "source_count", "stmt_type"]
     )
 
     return forward_df
