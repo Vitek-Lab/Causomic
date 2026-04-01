@@ -724,13 +724,7 @@ def process_bootstrap(
         epsilon=0.01,
         show_progress=False,
     )
-    # print("one bootstrap finished")
     return estimated_dag
-    # except Exception as e:
-    #     # Handle the exception here
-    #     print(f"An error occurred during bootstrap processing: {e}")
-    #     return None
-
 
 def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
     """

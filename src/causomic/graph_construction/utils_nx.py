@@ -146,6 +146,7 @@ def prepare_graph(
         total_evidence = 0
         source_key_union = set()
         stmt_type_union = set()
+        curated_union = set()
 
         for stmt in stmts:
             if not isinstance(stmt, dict):
@@ -158,6 +159,9 @@ def prepare_graph(
             filtered_statements.append(stmt)
             total_evidence += int(stmt.get("evidence_count") or 0)
             stmt_type_union.add(stmt_type)
+            
+            curated_flag = stmt.get("curated", False)
+            curated_union.add(curated_flag)
 
             source_counts = stmt.get("source_counts")
             if isinstance(source_counts, dict):
@@ -177,6 +181,7 @@ def prepare_graph(
             "total_evidence": total_evidence,
             "source_evidence": len(source_key_union),
             "stmt_type": list(stmt_type_union),
+            "curated": list(curated_union),
         }
         prepared_graph.add_edge(u, v, **edge_attrs)
 
@@ -473,45 +478,9 @@ def main():
     with open(file, "rb") as f:
         graph = pickle.load(f)
 
-    trog_targets = ["SERPINE1", "CYP3A4", "CTNNB1", "MAPK1"]
-
-    dili_targets = [
-        "ABCC2",
-        "ALB",
-        "CAT",
-        "CYP2C19",
-        "CYP2C9",
-        "CYP2E1",
-        "ENO1",
-        "GPT",
-        "GSR",
-        "GSTM1",
-        "GSTT1",
-        "HLA-A",
-        "HMOX1",
-        "HPD",
-        "KNG1",
-        "MTHFR",
-        "NAT2",
-        "SOD1",
-    ]
-
-    input_data = pd.read_csv("data/model_input.csv")
-
-    hgnc_graph = prepare_graph(
-        graph, input_data.columns, ["HGNC"], ["IncreaseAmount", "DecreaseAmount"]
-    )
-
-    forward_paths = query_forward_paths(
-        graph=hgnc_graph,
-        start_nodes=trog_targets,
-        end_nodes=dili_targets,
-        n_mediators=2,
-        med_ev_filter=[1, 1, 3],
-    )
-
-    print(forward_paths)
-
+    query_drug_targets(graph, 
+                        drug="troglitazone",
+                        target_ev_filter= 1)
 
 if __name__ == "__main__":
     main()
