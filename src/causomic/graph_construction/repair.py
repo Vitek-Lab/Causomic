@@ -123,7 +123,16 @@ def process_failed_test(
 
         # build all non-empty confounder combos (kept same range as original: r in [1])
         confounders = confounder_relations[(source, target)]
-        confounders = [i for i in confounders if i != given]
+        confounders = [i for i in confounders if i != given and i in data.columns]
+
+        # sort by combined absolute correlation with source and target so the
+        # most promising candidates are tested first, improving early termination
+        if confounders:
+            corr_scores = (
+                data[confounders].corrwith(data[source]).abs()
+                + data[confounders].corrwith(data[target]).abs()
+            )
+            confounders = corr_scores.sort_values(ascending=False).index.tolist()
 
         conf_list = list(confounders)
         all_combos = [

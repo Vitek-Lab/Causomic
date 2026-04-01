@@ -444,7 +444,7 @@ def repair_confounding(
     posterior_dag: NxMixedGraph,
     indra_graph: nx.DiGraph,
     max_conditional: int = 2,
-    n_jobs: int = 1,
+    n_jobs: int = -2,
     confounder_evidence: int = 1,
 ) -> NxMixedGraph:
     """
@@ -467,7 +467,6 @@ def repair_confounding(
         repaired_dag,
         data,
         max_given=max_conditional,
-        n_jobs=n_jobs,
         method="pearson",
         verbose=True,
         significance_level=0.05,
@@ -504,24 +503,22 @@ def repair_confounding(
         confounder_relations[tuple(nodes)] = indra_relations
 
     # Parallel processing of failed tests
-    results = []
     n = len(failed_tests)
     print(f"Processing {n} failed tests for confounding repair...")
 
-    # Use process-based parallelism with tqdm progress reporting
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(process_failed_test)(
-            failed_tests.loc[i], confounder_relations, data, max_conditional
+    # Pre-convert rows to dicts to avoid serializing the full DataFrame per worker
+    failed_test_rows = [failed_tests.loc[i].to_dict() for i in range(n)]
+
+    results = list(
+        tqdm(
+            Parallel(n_jobs=n_jobs, return_as="generator")(
+                delayed(process_failed_test)(row, confounder_relations, data, max_conditional)
+                for row in failed_test_rows
+            ),
+            total=n,
+            desc="Processing failed tests",
         )
-        for i in range(len(failed_tests))
     )
-    # results = list()
-    # for i in range(len(failed_tests)):
-    #     results.append(process_failed_test(
-    #             failed_tests.loc[i],
-    #             confounder_relations,
-    #             data
-    #         ))
 
     # Process results and collect statistics
     total_results = len(results)
