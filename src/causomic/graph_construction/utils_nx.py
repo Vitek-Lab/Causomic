@@ -286,7 +286,9 @@ def filtered_paths(
 
 def query_drug_targets(graph: nx.DiGraph, 
                        drug: str,
-                       target_ev_filter: int = 1) -> pd.DataFrame:
+                       target_ev_filter: int = 1,
+                       target_src_filter: int = 1,
+                       target_curated_filter: bool = False) -> pd.DataFrame:
     
     """
     Query drug targets from a directed graph and return aggregated evidence data.
@@ -319,20 +321,25 @@ def query_drug_targets(graph: nx.DiGraph,
     for successor in graph.successors(drug):
         edge = graph[drug][successor]
         ev = edge.get("evidence", {}).get("total_evidence", 0)
-        if ev >= target_ev_filter:
+        src = edge.get("evidence", {}).get("source_evidence", 0)
+        curated = edge.get("evidence", {}).get("curated", [False])[0]
+        if ev >= target_ev_filter and src >= target_src_filter and (not target_curated_filter or curated):
             edges_list.append(
                 (
                     drug,
                     successor,
                     edge["evidence"]["total_evidence"],
                     edge["evidence"]["source_evidence"],
+                    any(edge["evidence"]["curated"]),
                 )
             )
     
     result_df = pd.DataFrame(
-        edges_list, columns=["source", "target", "evidence_count", "source_count"]
+        edges_list, columns=["source", "target", "evidence_count", 
+                             "source_count", "curated"]
     )
-    result_df = result_df.groupby(["source", "target"], as_index=False).agg(
+    result_df = result_df.groupby(["source", "target", "curated"], 
+                                  as_index=False).agg(
         {"evidence_count": "sum", "source_count": "sum"}
     )
     return result_df
@@ -471,15 +478,31 @@ def query_forward_paths(
 
 def main():
 
-    file = "../../AstraZeneca_project/data/INDRA/indranet_dir_graph_fix_corr_weights.pkl"
+    file = '/Users/kohler.d/Downloads/updated_protein_INDRA (1).pkl'
     import pickle
 
+    import numpy as np
+    _orig_dtype = np.dtype
+    
+    def _patched_dtype(x, *args, **kwargs):
+        # pickle asks for np.dtype("f16"); map it to a real dtype object
+        if x == "f16":
+            try:
+                x = np.longdouble  # prefer the intended meaning
+            except Exception:
+                x = "float64"      # last-resort fallback
+        return _orig_dtype(x, *args, **kwargs)
+
+    np.dtype = _patched_dtype
+    
     # Replace 'file_path.pkl' with your actual file path
     with open(file, "rb") as f:
         graph = pickle.load(f)
 
+    np.dtype = _orig_dtype
+    
     query_drug_targets(graph, 
-                        drug="troglitazone",
+                        drug="idarubicin",
                         target_ev_filter= 1)
 
 if __name__ == "__main__":
