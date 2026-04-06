@@ -841,9 +841,9 @@ class LVM:
         learning_rate_decay = self.gamma ** (1 / self.num_steps)
         optimizer = pyro.optim.ClippedAdam({"lr": self.initial_lr, "lrd": learning_rate_decay})
 
-        # Use AutoDelta guide for point estimates.
-        # When using stochastic edges, block the discrete edge indicator sites from
-        # the guide — they are enumerated by TraceEnum_ELBO, not fitted variationally.
+        # Use AutoDelta guide for point estimates
+        # When using stochastic edges, block them from the guide since they are
+        # discrete and will be marginalized by Pyro's sampling during .step()
         if self.stochastic_edges:
             edge_sites = [
                 f"{node}_{parent}_edge"
@@ -855,8 +855,9 @@ class LVM:
             guide = AutoDelta(model)
 
         # Set up SVI inference
-        loss_fn = TraceEnum_ELBO(max_plate_nesting=1) if self.stochastic_edges else Trace_ELBO()
-        svi = SVI(model, guide, optimizer, loss=loss_fn)
+        # With stochastic edges inside the plate, we can use standard Trace_ELBO
+        # since discrete variables are marginalized naturally through sampling.
+        svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
 
         if verbose:
             print(f"Starting SVI training for {self.num_steps} steps with early stopping")
