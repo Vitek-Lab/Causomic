@@ -37,13 +37,14 @@ from jax import random
 from numpyro.infer import MCMC, NUTS
 from numpyro.infer import Predictive as NumpyroPredicitve
 from pyro import poutine
-from pyro.infer import SVI, Predictive, Trace_ELBO
+from pyro.infer import SVI, Predictive, Trace_ELBO, TraceEnum_ELBO
 from pyro.infer.autoguide import AutoDelta
 
 # CausOmic package imports
 from causomic.causal_model.models import (
     NumpyroProteomicPerturbationModel,
     ProteomicPerturbationModel,
+    StochasticEdgeProteomicModel,
 )
 from causomic.data_analysis.proteomics_data_processor import dataProcess
 from causomic.simulation.proteomics_simulator import simulate_data
@@ -208,6 +209,7 @@ class LVM:
         min_delta: float = 5,
         informative_priors: Optional[Dict[str, Dict[str, float]]] = None,
         verbose: bool = False,
+        stochastic_edges: bool = False,
     ):
 
         # Validate backend
@@ -226,6 +228,7 @@ class LVM:
         self.min_delta = min_delta
         self.informative_priors = informative_priors
         self.verbose = verbose
+        self.stochastic_edges = stochastic_edges
 
         # Initialize attributes that will be set during fitting
         self.obs_data: Optional[pd.DataFrame] = None
@@ -470,6 +473,13 @@ class LVM:
             list(self.informative_priors.keys()) if self.informative_priors is not None else []
         )
 
+        # Build edge probability lookup from graph edge attributes (stochastic mode only)
+        if self.stochastic_edges:
+            edge_prob_lookup = {
+                (str(u), str(v)): data.get("edge_prob", 0.5)
+                for u, v, data in self.causal_graph.directed.edges(data=True)
+            }
+
         # Set priors for root nodes (intercept and scale only)
         for node in self.root_nodes:
             if node in informative_nodes:
@@ -508,6 +518,13 @@ class LVM:
 
                 node_priors[f"{node}_int"] = 0.0
                 node_priors[f"{node}_int_scale"] = 1.0
+
+            # Inject edge inclusion probabilities for stochastic edge model
+            if self.stochastic_edges:
+                for parent in parent_nodes:
+                    node_priors[f"{node}_{parent}_edge_prob"] = edge_prob_lookup.get(
+                        (parent, node), 0.5
+                    )
 
             priors[node] = node_priors
 
@@ -772,7 +789,8 @@ class LVM:
         pyro.set_rng_seed(1234)
 
         # Initialize the model
-        model = ProteomicPerturbationModel(
+        model_cls = StochasticEdgeProteomicModel if self.stochastic_edges else ProteomicPerturbationModel
+        model = model_cls(
             n_obs=len(self.input_data),
             root_nodes=self.root_nodes,
             downstream_nodes=self.descendant_nodes,
@@ -823,11 +841,22 @@ class LVM:
         learning_rate_decay = self.gamma ** (1 / self.num_steps)
         optimizer = pyro.optim.ClippedAdam({"lr": self.initial_lr, "lrd": learning_rate_decay})
 
-        # Use AutoDelta guide for point estimates
-        guide = AutoDelta(model)
+        # Use AutoDelta guide for point estimates.
+        # When using stochastic edges, block the discrete edge indicator sites from
+        # the guide — they are enumerated by TraceEnum_ELBO, not fitted variationally.
+        if self.stochastic_edges:
+            edge_sites = [
+                f"{node}_{parent}_edge"
+                for node, parents in self.descendant_nodes.items()
+                for parent in parents
+            ]
+            guide = AutoDelta(poutine.block(model, hide=edge_sites))
+        else:
+            guide = AutoDelta(model)
 
         # Set up SVI inference
-        svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
+        loss_fn = TraceEnum_ELBO(max_plate_nesting=1) if self.stochastic_edges else Trace_ELBO()
+        svi = SVI(model, guide, optimizer, loss=loss_fn)
 
         if verbose:
             print(f"Starting SVI training for {self.num_steps} steps with early stopping")

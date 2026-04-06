@@ -288,6 +288,8 @@ def estimate_posterior_dag(
     corr_threshold: float = 0.95,
     edge_probability: float = 0.5,
     convert_to_probability: bool = True,
+    use_source_counts: bool = False,
+    return_bootstrap_dags: bool = False,
 ) -> NxMixedGraph:
     """
     Estimate a posterior directed acyclic graph (DAG) using bootstrap sampling.
@@ -338,10 +340,20 @@ def estimate_posterior_dag(
     convert_to_probability : bool, optional
         Whether to convert edge counts to probabilities before thresholding. Default is True.
 
+    use_source_counts : bool, optional
+        If True, use 'source_count' column instead of 'evidence_count' when weighting
+        prior edges. Default is False (uses evidence counts).
+
+    return_bootstrap_dags : bool, optional
+        If True, return a tuple of (y0_graph, bootstrap_dags) instead of just the
+        y0 graph. Default is False.
+
     Returns
     -------
-    NxMixedGraph
-        y0 graph object representing the posterior DAG edges.
+    NxMixedGraph or tuple[NxMixedGraph, list]
+        y0 graph object representing the posterior DAG edges. If return_bootstrap_dags
+        is True, returns a tuple of (y0_graph, bootstrap_dags) where bootstrap_dags
+        is the list of nx.DiGraph objects from each bootstrap run.
 
     Examples
     --------
@@ -424,6 +436,7 @@ def estimate_posterior_dag(
         corr_threshold,
         n_bootstrap,
         convert_to_probability,
+        use_source_counts,
     )
 
     # Run bootstrap sampling to generate multiple DAG hypotheses
@@ -436,6 +449,18 @@ def estimate_posterior_dag(
     # Convert posterior DAG to y0 graph format
     y0_graph = convert_to_y0_graph(posterior_dag)
 
+    # Compute per-edge bootstrap frequencies and store as edge_prob attribute
+    valid_dags = [d for d in bootstrap_dags if d is not None]
+    total = len(valid_dags)
+    edge_counts: Counter = Counter()
+    for dag in valid_dags:
+        edge_counts.update(list(dag.edges()))
+
+    for u, v in y0_graph.directed.edges():
+        y0_graph.directed[u][v]["edge_prob"] = edge_counts[(str(u), str(v))] / total if total > 0 else 0.5
+
+    if return_bootstrap_dags:
+        return y0_graph, bootstrap_dags
     return y0_graph
 
 

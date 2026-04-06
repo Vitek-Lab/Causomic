@@ -514,7 +514,7 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
             log_odds = np.log(p / (1 - p))
             prior_bonus += log_odds
 
-        prior_bonus *= self.prior_strength
+        # prior_bonus *= self.prior_strength
 
         return aic_score + prior_bonus
 
@@ -619,6 +619,26 @@ class BICGaussIndraPriors(LogLikelihoodGauss):
         Error handling returns -inf for degenerate cases (singular covariance
         matrices, etc.) to exclude them from consideration.
         """
+
+        # try:
+        #     ll, df_model = self._log_likelihood(variable=variable, parents=parents)
+        # except:
+        #     # statsmodels will raise ValueError if X is singular
+        #     return -np.inf
+        
+        # n = self.data.shape[0]
+        
+        # # Base penalty for intercept + variance (the +2 terms)
+        # base_penalty = np.log(n)
+        
+        # # Per-parent penalty modulated by prior
+        # edge_penalty = 0
+        # for parent in parents:
+        #     p = self.edge_priors[(parent, variable)]
+        #     p = np.clip(p, 1e-6, 1 - 1e-6)
+        #     edge_penalty += (1 - p) * (np.log(n) / 2)
+        
+        # return ll - base_penalty - edge_penalty
         try:
             ll, df_model = self._log_likelihood(variable=variable, parents=parents)
         except:
@@ -636,9 +656,10 @@ class BICGaussIndraPriors(LogLikelihoodGauss):
             log_odds = np.log(p / (1 - p))
             prior_bonus += log_odds
 
+        # Scale edge prior for comparability with BIC penalty. This could use more investigation to find the optimal scaling factor.
         prior_bonus *= self.prior_strength
+        # prior_bonus *= np.sqrt(self.data.shape[0])
         return bic_score + prior_bonus
-
 
 def process_bootstrap(
     data: pd.DataFrame,
@@ -720,13 +741,13 @@ def process_bootstrap(
     estimated_dag = est.estimate(
         scoring_method=custom_score,
         expert_knowledge=expert_knowledge,
-        max_indegree=3,
+        max_indegree=5,
         epsilon=0.01,
         show_progress=False,
     )
     return estimated_dag
 
-def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
+def calculate_edge_probabilities(indra_priors: pd.DataFrame, count_col: str = "evidence_count") -> dict:
     """
     Calculate edge probabilities from INDRA evidence counts using power law modeling.
 
@@ -779,7 +800,7 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
     probabilities while maintaining proper probability interpretation.
     """
     
-    edge_evidence = indra_priors["evidence_count"].values.astype(int)
+    edge_evidence = indra_priors[count_col].values.astype(int)
 
     xmin = edge_evidence.min()
 
@@ -808,7 +829,8 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame) -> dict:
 
 
 def prepare_indra_priors(indra_priors: pd.DataFrame,
-                         convert_to_probability: bool) -> dict:
+                         convert_to_probability: bool,
+                         use_source_counts: bool = False) -> dict:
     """
     Prepare INDRA prior data for causal discovery by converting to edge probabilities.
 
@@ -827,6 +849,14 @@ def prepare_indra_priors(indra_priors: pd.DataFrame,
         - 'source': Source protein/gene symbol
         - 'target': Target protein/gene symbol
         - 'evidence_count': Number of supporting evidence instances
+        - 'source_count': Number of distinct sources (used when use_source_counts=True)
+
+    convert_to_probability : bool
+        Whether to convert counts to probabilities via power law modeling.
+
+    use_source_counts : bool, optional
+        If True, use the 'source_count' column instead of 'evidence_count'.
+        Default is False (uses evidence counts).
 
     Returns
     -------
@@ -868,11 +898,16 @@ def prepare_indra_priors(indra_priors: pd.DataFrame,
     Missing evidence counts are filled with probability 1.0 to ensure all
     edges in the prior network are considered, even if evidence is sparse.
     """
+    count_col = "source_count" if use_source_counts else "evidence_count"
     if convert_to_probability:
-        edge_probability_mapper = calculate_edge_probabilities(indra_priors)
-        indra_priors["edge_p"] = indra_priors["evidence_count"].map(edge_probability_mapper).fillna(1.0)
+        # edge_probability_mapper = calculate_edge_probabilities(indra_priors, count_col)
+        # indra_priors["edge_p"] = indra_priors[count_col].map(edge_probability_mapper).fillna(1.0)
+        log_ev = np.log1p(indra_priors[count_col])
+        median_log_ev = np.median(log_ev)
+        indra_priors["edge_p"] = 1 / (1 + np.exp(-2 * (log_ev - median_log_ev)))
+
     else:
-        indra_priors["edge_p"] = indra_priors["evidence_count"]
+        indra_priors["edge_p"] = indra_priors[count_col]
         
     edge_probabilities = {
         (
@@ -979,6 +1014,7 @@ def run_bootstrap(
     corr_threshold: float = 0.8,
     n_bootstrap: int = 100,
     convert_to_probability: bool = True,
+    use_source_counts: bool = False,
 ) -> list:
     """
     Run parallel bootstrap analysis for robust causal discovery with INDRA priors.
@@ -1091,7 +1127,7 @@ def run_bootstrap(
 
     print("INFO: Calculating edge probabilities.")
 
-    edge_probabilities = prepare_indra_priors(updated_indra_priors, convert_to_probability)
+    edge_probabilities = prepare_indra_priors(updated_indra_priors, convert_to_probability, use_source_counts)
 
     print("INFO: Running bootstrap.")
     bootstrap_dags = Parallel(n_jobs=-2)(
@@ -1123,14 +1159,17 @@ def main():
     import pickle
     import time
 
-    with open("data/model_input.pkl", "rb") as f:
+    with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
         model_input = pickle.load(f)
+    
     model_input = list(model_input)
-    model_input[3] = AICGaussIndraPriors
+    model_input[3] = BICGaussIndraPriors
+    model_input[1].rename(columns={"source_symbol": "source", "target_symbol": "target"}, inplace=True)
+    
     model_input.append(False)
     model_input = tuple(model_input)
     start_time = time.time()
-    bootstrap_dags = run_bootstrap(*model_input, 50)
+    bootstrap_dags = run_bootstrap(*model_input, n_bootstrap=50)
     end_time = time.time()
     print(f"Time taken: {end_time - start_time} seconds")
 
