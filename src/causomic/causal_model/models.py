@@ -216,6 +216,195 @@ class ProteomicPerturbationModel(PyroModule):
         return downstream_distributions
 
 
+class StochasticEdgeProteomicModel(PyroModule):
+    """
+    Pyro model for causal inference with stochastic edge inclusion.
+
+    Extends ProteomicPerturbationModel by treating each edge in the causal
+    graph as a latent binary variable. Each edge is included with a prior
+    probability provided by the caller, allowing the model to reason about
+    graph structure uncertainty alongside parameter uncertainty.
+
+    Edge inclusion indicators are sampled once per inference step (not per
+    observation) and enumerated in parallel via TraceEnum_ELBO for
+    compatibility with SVI.
+
+    Parameters
+    ----------
+    n_obs : int
+        Number of observations in the dataset
+    root_nodes : List[str]
+        List of root node names (variables with no parents)
+    downstream_nodes : Dict[str, List[str]]
+        Dictionary mapping downstream node names to their parent node names
+
+    Notes
+    -----
+    Requires ``TraceEnum_ELBO`` (or ``JitTraceEnum_ELBO``) as the loss
+    function when used with SVI, because of the discrete edge indicators.
+
+    Edge inclusion probabilities are read from ``priors`` using the key
+    ``"{node}_{parent}_edge_prob"`` under ``priors[node]``.  If the key is
+    absent, a flat 0.5 prior is used.
+    """
+
+    def __init__(self, n_obs: int, root_nodes: List[str], downstream_nodes: Dict[str, List[str]]):
+        super().__init__()
+        self.n_obs = n_obs
+        self.root_nodes = root_nodes
+        self.downstream_nodes = downstream_nodes
+
+    def forward(
+        self,
+        data: Dict[str, torch.Tensor],
+        priors: Dict[str, Dict[str, float]],
+        dpc_slope: float = 1,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass with stochastic edge inclusion.
+
+        Samples a Bernoulli indicator for each edge in the graph before
+        entering the observation plate.  Inside the plate the contribution
+        of each parent is gated by its indicator:
+        ``mean += indicator * coef * parent_value``.
+
+        Parameters
+        ----------
+        data : Dict[str, torch.Tensor]
+            Dictionary containing observed data tensors and missing data masks
+        priors : Dict[str, Dict[str, float]]
+            Nested dictionary specifying prior distributions for model parameters.
+            Per-edge inclusion probabilities are read from
+            ``priors[node]["{node}_{parent}_edge_prob"]``; defaults to 0.5.
+        dpc_slope : float, default=1
+            Slope parameter for dose-response curves (currently unused)
+
+        Returns
+        -------
+        Dict[str, torch.Tensor]
+            Dictionary mapping variable names to their sampled values
+        """
+
+        downstream_coef_dict_mean: Dict[str, torch.Tensor] = dict()
+        downstream_coef_dict_scale: Dict[str, torch.Tensor] = dict()
+        root_coef_dict_mean: Dict[str, torch.Tensor] = dict()
+        root_coef_dict_scale: Dict[str, torch.Tensor] = dict()
+        edge_indicators: Dict[str, torch.Tensor] = dict()
+
+        # Sample coefficients and edge inclusion indicators
+        for node_name, items in self.downstream_nodes.items():
+
+            downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
+                f"{node_name}_int",
+                pyro_dist.Normal(
+                    priors[node_name][f"{node_name}_int"],
+                    priors[node_name][f"{node_name}_int_scale"],
+                ),
+            )
+
+            for item in items:
+                downstream_coef_dict_mean[f"{node_name}_{item}_coef"] = pyro.sample(
+                    f"{node_name}_{item}_coef",
+                    pyro_dist.Normal(
+                        priors[node_name][f"{node_name}_{item}_coef"],
+                        priors[node_name][f"{node_name}_{item}_coef_scale"],
+                    ),
+                )
+
+                edge_prob = priors[node_name].get(f"{node_name}_{item}_edge_prob", 0.5)
+                if not isinstance(edge_prob, torch.Tensor):
+                    edge_prob = torch.tensor(edge_prob, dtype=torch.float32, device=device)
+                edge_indicators[f"{node_name}_{item}_edge"] = pyro.sample(
+                    f"{node_name}_{item}_edge",
+                    pyro_dist.Bernoulli(edge_prob),
+                    infer={"enumerate": "parallel"},
+                )
+
+            if node_name not in "Output":
+                downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
+                    f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
+                )
+
+        for node_name in self.root_nodes:
+            root_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
+                f"{node_name}_int",
+                pyro_dist.Normal(
+                    priors[node_name][f"{node_name}_int"],
+                    priors[node_name][f"{node_name}_int_scale"],
+                ),
+            )
+            root_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
+                f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
+            )
+
+        downstream_distributions: Dict[str, torch.Tensor] = dict()
+
+        with pyro.plate("observations", self.n_obs):
+
+            for node_name in self.root_nodes:
+
+                mean = root_coef_dict_mean[f"{node_name}_int"]
+                scale = root_coef_dict_scale[f"{node_name}_scale"]
+
+                if f"obs_{node_name}" in data:
+                    x = pyro.sample(f"{node_name}_real", pyro_dist.Normal(mean, scale))
+                    obs_eps = pyro.sample(
+                        f"{node_name}_obs_eps",
+                        pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)),
+                    )
+                    mask = ~data[f"missing_{node_name}"].bool()
+                    with poutine.mask(mask=mask):
+                        pyro.sample(
+                            f"obs_{node_name}",
+                            pyro_dist.Normal(x, obs_eps),
+                            obs=data[f"obs_{node_name}"],
+                        )
+                else:
+                    x = pyro.sample(node_name, pyro_dist.Normal(mean, scale))
+                downstream_distributions[node_name] = x
+
+            for node_name, items in self.downstream_nodes.items():
+
+                mean = downstream_coef_dict_mean[f"{node_name}_int"]
+                for item in items:
+                    coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
+                    indicator = edge_indicators[f"{node_name}_{item}_edge"]
+                    mean = mean + indicator * coef * downstream_distributions[item]
+
+                if "Output" not in node_name:
+                    scale = downstream_coef_dict_scale[f"{node_name}_scale"]
+
+                if f"obs_{node_name}" in data:
+                    if "Output" in node_name:
+                        y = pyro.sample(
+                            f"obs_{node_name}",
+                            pyro_dist.Bernoulli(logits=mean),
+                            obs=data[f"obs_{node_name}"],
+                        )
+                    else:
+                        y = pyro.sample(f"{node_name}_real", pyro_dist.Normal(mean, scale))
+                        mask = ~data[f"missing_{node_name}"].bool()
+                        obs_eps = pyro.sample(
+                            f"{node_name}_obs_eps",
+                            pyro_dist.HalfCauchy(torch.tensor(0.1, device=device)),
+                        )
+                        with poutine.mask(mask=mask):
+                            pyro.sample(
+                                f"obs_{node_name}",
+                                pyro_dist.Normal(y, obs_eps),
+                                obs=data[f"obs_{node_name}"],
+                            )
+                else:
+                    if "Output" in node_name:
+                        y = pyro.sample(node_name, pyro_dist.Bernoulli(logits=mean))
+                    else:
+                        y = pyro.sample(node_name, pyro_dist.Normal(mean, scale))
+
+                downstream_distributions[node_name] = y
+
+        return downstream_distributions
+
+
 def NumpyroProteomicPerturbationModel(
     data: Dict[str, jnp.ndarray],
     missing: Dict[str, jnp.ndarray],

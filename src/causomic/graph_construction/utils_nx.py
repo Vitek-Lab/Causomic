@@ -255,32 +255,49 @@ def query_confounders(
     return confounder_df
 
 
-def edge_ok(G: nx.DiGraph, u: str, v: str, thr: int = 5) -> bool:
-    """Return True if edge (u, v) has total evidence >= thr.
+def edge_ok(G: nx.DiGraph, u: str, v: str, thr: int = 5, src_thr: int = 1) -> bool:
+    """Return True if edge (u, v) has total evidence >= thr and source count >= src_thr.
 
     Args:
         G: Graph containing the edge.
         u: source node id.
         v: target node id.
         thr: evidence threshold (inclusive).
+        src_thr: source count threshold (inclusive).
     """
 
     d = G[u][v]  # edge attributes dict
     ev = d.get("evidence", {}).get("total_evidence", 0)
-    return ev >= thr
+    src = d.get("evidence", {}).get("source_evidence", 0)
+    return ev >= thr and src >= src_thr
 
 
 def filtered_paths(
-    G: nx.Graph, source: str, target: str, cutoff: Optional[int] = None, thr: int = 1
+    G: nx.DiGraph,
+    source: str,
+    target: str,
+    cutoff: Optional[int] = None,
+    thr: int = 1,
+    src_thr: int = 1,
 ):
-    """Yield simple paths from source to target over edges meeting evidence threshold.
+    """Yield simple paths from source to target over edges meeting evidence and source count thresholds.
 
-    The function constructs a subgraph view that hides edges failing the
-    evidence threshold and then yields paths found by
+    The function constructs a subgraph view that hides edges failing either
+    threshold and then yields paths found by
     :func:`networkx.all_simple_paths`.
+
+    Args:
+        G: Graph to search.
+        source: Source node id.
+        target: Target node id.
+        cutoff: Maximum path length (number of edges). None means unlimited.
+        thr: Minimum total evidence count per edge (inclusive).
+        src_thr: Minimum source count per edge (inclusive).
     """
 
-    view = nx.subgraph_view(G, filter_edge=lambda u, v: edge_ok(G, u, v, thr=thr))
+    view = nx.subgraph_view(
+        G, filter_edge=lambda u, v: edge_ok(G, u, v, thr=thr, src_thr=src_thr)
+    )
     # works for Graph/DiGraph/Multi(Di)Graph (paths are node sequences)
     yield from nx.all_simple_paths(view, source, target, cutoff=cutoff)
 
@@ -405,14 +422,14 @@ def query_forward_paths(
     end_nodes: Iterable[str],
     n_mediators: int = 1,
     med_ev_filter: Optional[List[int]] = None,
+    med_src_filter: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     """Search for simple forward paths from any start node to any end node.
 
     For each mediator depth from 0..n_mediators the function will collect
     paths with exactly that many intermediate nodes between the start and
     end nodes. This corresponds to path lengths of ``mediator_count + 1``
-    edges, subject to the corresponding evidence threshold in
-    ``med_ev_filter``.
+    edges, subject to the corresponding evidence and source count thresholds.
 
     Args:
         graph: DiGraph annotated with evidence counts on edges.
@@ -421,6 +438,9 @@ def query_forward_paths(
         n_mediators: Maximum number of mediator nodes between start and end.
         med_ev_filter: Optional list of integer thresholds with length
             ``n_mediators + 1`` where index ``i`` applies to paths with
+            ``i`` mediators. If None, defaults to all ones.
+        med_src_filter: Optional list of integer source count thresholds with
+            length ``n_mediators + 1`` where index ``i`` applies to paths with
             ``i`` mediators. If None, defaults to all ones.
 
     Returns:
@@ -432,17 +452,28 @@ def query_forward_paths(
     if med_ev_filter is None:
         med_ev_filter = [1] * (n_mediators + 1)
 
+    if med_src_filter is None:
+        med_src_filter = [1] * (n_mediators + 1)
+
     if n_mediators < 0:
         raise ValueError("n_mediators must be non-negative")
 
     if len(med_ev_filter) != (n_mediators + 1):
         raise ValueError("med_ev_filter must have length n_mediators + 1")
 
+    if len(med_src_filter) != (n_mediators + 1):
+        raise ValueError("med_src_filter must have length n_mediators + 1")
+
     paths = []
     for start in tqdm(list(start_nodes), desc="Processing start nodes"):
+        if start not in graph.nodes:
+            print(f"Start node '{start}' is missing from graph. Skipping.")
+            continue
+
         for end in end_nodes:
             for med in range(0, n_mediators + 1):
                 thr = med_ev_filter[med]
+                src_thr = med_src_filter[med]
                 all_paths = list(
                     filtered_paths(
                         graph,
@@ -450,6 +481,7 @@ def query_forward_paths(
                         target=end,
                         cutoff=med + 1,
                         thr=thr,
+                        src_thr=src_thr,
                     )
                 )
                 if all_paths:
