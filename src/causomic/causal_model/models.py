@@ -289,9 +289,9 @@ class StochasticEdgeProteomicModel(PyroModule):
         downstream_coef_dict_scale: Dict[str, torch.Tensor] = dict()
         root_coef_dict_mean: Dict[str, torch.Tensor] = dict()
         root_coef_dict_scale: Dict[str, torch.Tensor] = dict()
-        edge_indicators: Dict[str, torch.Tensor] = dict()
+        edge_probs: Dict[str, torch.Tensor] = dict()
 
-        # Sample coefficients and edge inclusion indicators
+        # Sample coefficients (outside plate)
         for node_name, items in self.downstream_nodes.items():
 
             downstream_coef_dict_mean[f"{node_name}_int"] = pyro.sample(
@@ -311,14 +311,11 @@ class StochasticEdgeProteomicModel(PyroModule):
                     ),
                 )
 
+                # Store edge probability for use in plate
                 edge_prob = priors[node_name].get(f"{node_name}_{item}_edge_prob", 0.5)
                 if not isinstance(edge_prob, torch.Tensor):
                     edge_prob = torch.tensor(edge_prob, dtype=torch.float32, device=device)
-                edge_indicators[f"{node_name}_{item}_edge"] = pyro.sample(
-                    f"{node_name}_{item}_edge",
-                    pyro_dist.Bernoulli(edge_prob),
-                    infer={"enumerate": "parallel"},
-                )
+                edge_probs[f"{node_name}_{item}_edge"] = edge_prob
 
             if node_name not in "Output":
                 downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
@@ -368,7 +365,11 @@ class StochasticEdgeProteomicModel(PyroModule):
                 mean = downstream_coef_dict_mean[f"{node_name}_int"]
                 for item in items:
                     coef = downstream_coef_dict_mean[f"{node_name}_{item}_coef"]
-                    indicator = edge_indicators[f"{node_name}_{item}_edge"]
+                    # Sample edge indicator inside plate for efficient marginalization
+                    indicator = pyro.sample(
+                        f"{node_name}_{item}_edge",
+                        pyro_dist.Bernoulli(edge_probs[f"{node_name}_{item}_edge"]),
+                    )
                     mean = mean + indicator * coef * downstream_distributions[item]
 
                 if "Output" not in node_name:
