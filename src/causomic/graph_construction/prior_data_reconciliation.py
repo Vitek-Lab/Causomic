@@ -500,7 +500,11 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         - p < 0.5 gives negative bonus (discourages edge)
         - p = 0.5 gives zero bonus (neutral)
         """
-        ll, df_model = self._log_likelihood(variable=variable, parents=parents)
+        try:
+            ll, df_model = self._log_likelihood(variable=variable, parents=parents)
+        except:
+            # statsmodels will raise ValueError if X is singular
+            return -np.inf
 
         # Standard AIC score
         aic_score = ll - (df_model + 2)
