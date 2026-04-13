@@ -211,7 +211,8 @@ def simulate_data(
         else:
             temp_int = None
 
-        data[node] = simulate_node(data, node_coefficients, n, cell_type, temp_int, node)
+        data[node] = simulate_node(data, node_coefficients, 
+                                   n, cell_type, temp_int, node)
 
     if cell_type:
         data["cell_type"] = np.repeat([i for i in range(n_cells)], n // n_cells)
@@ -222,7 +223,7 @@ def simulate_data(
         if error_node is None:
             for node, _ in data.items():
                 if node != "Output":
-                    data[node] += np.random.normal(0, 0.25, n)
+                    data[node] += np.random.normal(0, 1, n)
         else:
             data[error_node] += np.random.normal(0, 5, n)
 
@@ -360,7 +361,7 @@ def generate_node_coefficients(parents: List[str]) -> Dict[str, float]:
 
     for parent in parents:
         coefficients[parent] = np.random.choice(
-            [np.random.uniform(-1.0, -0.5), np.random.uniform(0.5, 1.5)]
+            [np.random.uniform(-0.75, -0.1), np.random.uniform(0.1, 0.75)]
         )
 
     if len(coefficients.keys()) == 0:
@@ -380,7 +381,7 @@ def simulate_node(
     cell_type: bool,
     intervention: Optional[float],
     node_name: str,
-) -> np.ndarray:
+    ) -> np.ndarray:
     """
     Simulate data for a single node using its structural equation.
 
@@ -466,7 +467,9 @@ def simulate_node(
     node_data = coefficients["intercept"]
 
     for parent in parents:
-        node_data += coefficients[parent] * data[parent]
+        # Mean-center parent values so the intercept always represents the
+        # expected value of this node regardless of cascade depth.
+        node_data += coefficients[parent] * (data[parent] - data[parent].mean())
 
     if cell_type & ("cell_type" in coefficients.keys()):
         ## add in cell_effect
