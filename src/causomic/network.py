@@ -29,6 +29,7 @@ Dependencies:
 import os
 import copy
 from collections import Counter
+from typing import Set, Iterable
 
 import networkx as nx
 import numpy as np
@@ -290,6 +291,7 @@ def estimate_posterior_dag(
     convert_to_probability: bool = True,
     use_source_counts: bool = False,
     return_bootstrap_dags: bool = False,
+    random_init: bool = False,
 ) -> NxMixedGraph:
     """
     Estimate a posterior directed acyclic graph (DAG) using bootstrap sampling.
@@ -347,6 +349,11 @@ def estimate_posterior_dag(
     return_bootstrap_dags : bool, optional
         If True, return a tuple of (y0_graph, bootstrap_dags) instead of just the
         y0 graph. Default is False.
+
+    random_init : bool, optional
+        If True, initialize each bootstrap hill climb from a random acyclic subgraph
+        rather than an empty DAG. This can help escape local optima at the cost of
+        increased run-to-run variability. Default is False.
 
     Returns
     -------
@@ -437,14 +444,17 @@ def estimate_posterior_dag(
         n_bootstrap,
         convert_to_probability,
         use_source_counts,
+        random_init,
     )
 
     # Run bootstrap sampling to generate multiple DAG hypotheses
     bootstrap_dags = run_bootstrap(*model_input)
 
     # Integrate bootstrap results into one final DAG using consensus approach
-    posterior_dag = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=edge_probability)
-    posterior_dag = pd.DataFrame(posterior_dag.edges, columns=["source", "target"])
+    posterior_dag = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, 
+                                  min_freq=edge_probability)
+    posterior_dag = pd.DataFrame(posterior_dag.edges, 
+                                 columns=["source", "target"])
 
     # Convert posterior DAG to y0 graph format
     y0_graph = convert_to_y0_graph(posterior_dag)
@@ -462,6 +472,49 @@ def estimate_posterior_dag(
     if return_bootstrap_dags:
         return y0_graph, bootstrap_dags
     return y0_graph
+
+def nodes_on_causal_paths(
+    G: NxMixedGraph,
+    start_nodes: Iterable[str],
+    end_nodes: Iterable[str],
+) -> Set[str]:
+    """Return the set of nodes that lie on at least one directed path
+    from any node in `start_nodes` to any node in `end_nodes`.
+
+    Uses only G.directed for path traversal. Runs in O(V + E) via two
+    BFS passes.
+    """
+    directed = G.directed
+    start_nodes = set(start_nodes) & set(directed.nodes)
+    end_nodes = set(end_nodes) & set(directed.nodes)
+
+    # Forward-reachable from any start node
+    forward = set()
+    for s in start_nodes:
+        forward |= nx.descendants(directed, s)
+    forward |= start_nodes
+
+    # Backward-reachable from any end node (traverse reversed graph)
+    rev = directed.reverse(copy=False)
+    backward = set()
+    for e in end_nodes:
+        backward |= nx.descendants(rev, e)
+    backward |= end_nodes
+
+    return forward & backward
+
+
+def filter_to_causal_subgraph(
+    G: NxMixedGraph,
+    start_nodes: Iterable[str],
+    end_nodes: Iterable[str],
+) -> NxMixedGraph:
+    """Return a new NxMixedGraph containing only nodes on directed
+    causal paths, preserving all edge types (directed and bidirected)
+    between retained nodes.
+    """
+    keep = nodes_on_causal_paths(G, start_nodes, end_nodes)
+    return G.subgraph(keep)
 
 
 def repair_confounding(
@@ -609,40 +662,75 @@ def repair_confounding(
 
 
 def main():
-    """
-    Example usage of the network estimation pipeline.
+    from causomic.simulation.proteomics_simulator import simulate_data
+    from causomic.simulation.random_network import generate_structured_dag
+    from causomic.simulation.random_network import generate_indra_data
+    # ── 1. Ground truth DAG ───────────────────────────────────────────────────────
+    gt_dag, roles = generate_structured_dag(
+        n_start=30,
+        n_end=8,
+        max_mediators=4,
+        shared_mediator_prob=0.5,
+        confounder_prob=0.05,
+        seed=17,
+    )
+    n_real_nodes = gt_dag.number_of_nodes()
+    n_real_edges = gt_dag.number_of_edges()
+    n_fake_nodes = n_real_nodes            # ~1× more nodes than real
+    n_fake_edges = n_real_edges * 3        # ~3× more edges than real
+    indra_dag, indra_df, missing_edges = generate_indra_data(
+        gt_dag,
+        num_incorrect_nodes=n_fake_nodes,
+        num_incorrect_edges=n_fake_edges,
+        p_missing_real=0.0,
+    )
+    spurious_nodes = [n for n in indra_dag.nodes() if n not in gt_dag.nodes()]
 
-    Demonstrates how to:
-    1. Set up source and target proteins for pathway analysis
-    2. Connect to INDRA database using authentication
-    3. Extract prior biological knowledge
-    4. Use the extracted priors for causal network learning
+    augmented_dag = gt_dag.copy()
+    for xn in spurious_nodes:
+        augmented_dag.add_node(xn)   # no edges — fully isolated
 
-    This function serves as a template for typical causomic workflows
-    involving IGF and EGFR signaling pathways.
-    """
+    sim = simulate_data(
+        augmented_dag,
+        n=150,
+        add_feature_var=False,   # protein-level only for clarity
+        add_error=True,
+        seed=42,
+    )
+    protein_data = pd.DataFrame(sim['Protein_data'])
 
-    from indra_cogex.client import Neo4jClient
-    from sklearn.model_selection import train_test_split
+    posterior, bootstraps = estimate_posterior_dag(
+        protein_data,
+        indra_priors=indra_df,
+        prior_strength=0.5,
+        scoring_function=BICGaussIndraPriors,
+        search_algorithm=SparseHillClimb,
+        n_bootstrap=100,
+        add_high_corr_edges_to_priors=False,
+        corr_threshold=0.9,
+        edge_probability=0.9,
+        convert_to_probability=True,
+        return_bootstrap_dags=True
+    )
+    # ── Evaluate against ground truth ────────────────────────────────────────────
+    # Build predicted edge set from posterior directed graph
+    pred_edges = set(
+        (str(u), str(v))
+        for u, v in posterior.directed.edges()
+    )
 
-    client = Neo4jClient(url=os.getenv("API_URL"), 
-                            auth=(os.getenv("USER"), 
-                                os.getenv("PASSWORD"))
-                        )
-    
-    input_data = pd.read_csv("../../AstraZeneca_project/case_studies/compounds/model_input.csv")
+    # Ground truth edge set — all edges including confounders.
+    # Confounders are observed here (included in data and INDRA), so their
+    # edges are valid ground truth to recover.
+    observable_gt_edges = set(gt_dag.edges())
 
-    input_data_graph, input_data_scm = train_test_split(
-        input_data, test_size=0.5, random_state=42)
-        
-    trog_targets = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1']
+    tp_edges = pred_edges & observable_gt_edges
+    fp_edges = pred_edges - observable_gt_edges
+    fn_edges = observable_gt_edges - pred_edges
 
-    dili_targets = ['ALB']
-
-    indra_prior = extract_indra_prior(
-        trog_targets, dili_targets, input_data_graph.columns, client,
-        one_step_evidence=1, two_step_evidence=1,
-        three_step_evidence=3, confounder_evidence=5000000)
+    precision = len(tp_edges) / len(pred_edges) if pred_edges else 0.0
+    recall    = len(tp_edges) / len(observable_gt_edges) if observable_gt_edges else 0.0
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     
 if __name__ == "__main__":
     main()

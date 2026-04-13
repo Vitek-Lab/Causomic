@@ -1,6 +1,7 @@
 import networkx as nx
 import numpy as np
 import pandas as pd
+from typing import Optional
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, recall_score, precision_score
 
@@ -49,66 +50,345 @@ def generate_random_dag(num_nodes, sparsity_factor):
 
     return dag
 
-def generate_indra_data(ground_truth_dag, num_incorrect_nodes=20, num_incorrect_edges=40):
+
+def generate_structured_dag(
+    n_start: int = 3,
+    n_end: int = 3,
+    max_mediators: int = 3,
+    confounder_prob: float = 0.1,
+    shared_mediator_prob: float = 0.3,
+    seed: Optional[int] = None,
+) -> tuple:
     """
-    Generate INDRa-compatible data from a ground truth DAG by introducing incorrect nodes and edges.
+    Generate a structured DAG with semantic node roles: ligands (start), readouts (end),
+    mediators, and confounders.
+
+    Parameters
+    ----------
+    n_start : int
+        Number of start (ligand) nodes. Named L0, L1, ...
+    n_end : int
+        Number of end (readout) nodes. Named R0, R1, ...
+    max_mediators : int
+        Maximum number of mediator nodes in any single start-to-end chain.
+        Each path independently samples 0..max_mediators mediators.
+    confounder_prob : float
+        Fraction of observable nodes to add as confounders.
+        n_confounders = max(0, round(confounder_prob * n_observable_nodes)).
+        Each confounder has edges into 2 randomly selected observable nodes.
+    shared_mediator_prob : float
+        Probability of reusing an existing mediator node at each slot in a
+        new chain (cross-talk). Falls back to a fresh node if reuse would
+        create a cycle.
+    seed : int or None
+        Seed for numpy.random.default_rng. None gives non-deterministic output.
+
+    Returns
+    -------
+    dag : nx.DiGraph
+        A valid DAG with all structural edges.
+    node_roles : dict
+        Keys: 'start', 'end', 'mediators', 'confounders'.
+        Each value is a list of node name strings.
+    """
+    rng = np.random.default_rng(seed)
+    dag = nx.DiGraph()
+
+    start_nodes = [f"L{i}" for i in range(n_start)]
+    end_nodes = [f"R{i}" for i in range(n_end)]
+    dag.add_nodes_from(start_nodes + end_nodes)
+
+    mediator_pool: list = []
+    med_count = 0
+
+    # Truncated geometric weights: biases toward 1-3 connections, not all-to-all
+    p_geom = 0.5
+    ks = np.arange(1, n_end + 1)
+    weights = p_geom * (1 - p_geom) ** (ks - 1)
+    weights /= weights.sum()
+
+    for li in start_nodes:
+        k = int(rng.choice(ks, p=weights))
+        target_ends = rng.choice(end_nodes, size=k, replace=False).tolist()
+
+        for rj in target_ends:
+            n_med = int(rng.integers(0, max_mediators + 1))
+
+            chain = [li]
+            new_meds_for_chain: list = []
+
+            for _ in range(n_med):
+                placed = False
+                if mediator_pool and rng.random() < shared_mediator_prob:
+                    shuffled_pool = list(mediator_pool)
+                    rng.shuffle(shuffled_pool)
+                    for cand in shuffled_pool:
+                        if cand not in chain:
+                            chain.append(cand)
+                            placed = True
+                            break
+                if not placed:
+                    new_name = f"M{med_count}"
+                    med_count += 1
+                    chain.append(new_name)
+                    new_meds_for_chain.append(new_name)
+
+            chain.append(rj)
+            proposed_edges = [(chain[i], chain[i + 1]) for i in range(len(chain) - 1)]
+
+            g_test = dag.copy()
+            g_test.add_nodes_from(new_meds_for_chain)
+            g_test.add_edges_from(proposed_edges)
+
+            if nx.is_directed_acyclic_graph(g_test):
+                dag.add_nodes_from(new_meds_for_chain)
+                dag.add_edges_from(proposed_edges)
+                mediator_pool.extend(new_meds_for_chain)
+            else:
+                # Fallback: all-new mediators — guaranteed acyclic
+                chain_fb = [li]
+                fb_meds: list = []
+                for _ in range(n_med):
+                    nm = f"M{med_count}"
+                    med_count += 1
+                    chain_fb.append(nm)
+                    fb_meds.append(nm)
+                chain_fb.append(rj)
+                dag.add_nodes_from(fb_meds)
+                dag.add_edges_from(
+                    [(chain_fb[i], chain_fb[i + 1]) for i in range(len(chain_fb) - 1)]
+                )
+                mediator_pool.extend(fb_meds)
+
+    observable_nodes = start_nodes + mediator_pool + end_nodes
+    n_conf = max(0, round(confounder_prob * len(observable_nodes)))
+    conf_nodes: list = []
+
+    for ci in range(n_conf):
+        cname = f"C{ci}"
+        dag.add_node(cname)
+        conf_nodes.append(cname)
+        n_targets = min(2, len(observable_nodes))
+        targets = rng.choice(observable_nodes, size=n_targets, replace=False).tolist()
+        for t in targets:
+            dag.add_edge(cname, t)
+
+    assert nx.is_directed_acyclic_graph(dag), (
+        "generate_structured_dag produced a cyclic graph — this is a bug."
+    )
+
+    node_roles = {
+        "start": start_nodes,
+        "end": end_nodes,
+        "mediators": mediator_pool,
+        "confounders": conf_nodes,
+    }
+
+    return dag, node_roles
+
+
+def ground_truth_interventional_effect(
+    dag: nx.DiGraph,
+    coefficients: dict,
+    intervention_nodes: dict,
+    output_nodes: list,
+) -> dict:
+    """
+    Compute the ground-truth expected interventional effect using the SEM coefficients.
+
+    Uses the do-calculus: sets each intervened node to its fixed value (cutting
+    incoming edges) and propagates expected values analytically through the DAG.
+    Because ``simulate_node`` mean-centers parent values before multiplying by
+    coefficients, the observational expected value of every node equals its
+    intercept.  Under do(X = v) the deviation from that baseline propagates
+    linearly downstream.
+
+    Parameters
+    ----------
+    dag : nx.DiGraph
+        The causal graph returned by ``generate_structured_dag`` (or any DAG
+        whose nodes match the keys in ``coefficients``).
+    coefficients : dict
+        Structural equation coefficients as returned by ``simulate_data`` in
+        the ``'Coefficients'`` key.  Format::
+
+            {node: {parent: coef, 'intercept': val, 'error': var}}
+
+    intervention_nodes : dict
+        Mapping of node name → interventional value, e.g. ``{'L0': 30.0}``.
+    output_nodes : list
+        Names of the nodes whose post-intervention expected values are of
+        interest, e.g. ``['R0', 'R1']``.
+
+    Returns
+    -------
+    dict
+        Keys:
+        - ``'baseline'``: {node: E[node]} under observation (= intercept for each node)
+        - ``'interventional'``: {node: E[node | do(...)]} for every node in the DAG
+        - ``'effect'``: {node: E[node | do(...)] - E[node]} for each output node
+          (positive = increase, negative = decrease)
+
+    Examples
+    --------
+    >>> dag, roles = generate_structured_dag(n_start=1, n_end=1, seed=0)
+    >>> sim = simulate_data(dag, n=500, add_feature_var=False, seed=0)
+    >>> result = ground_truth_interventional_effect(
+    ...     dag,
+    ...     sim['Coefficients'],
+    ...     intervention_nodes={'L0': 30.0},
+    ...     output_nodes=['R0'],
+    ... )
+    >>> print(result['effect'])
+    """
+    _non_coef = {"intercept", "error", "cell_type"}
+
+    # Observational expected value = intercept for every node (mean-centering
+    # cancels all parent contributions in expectation).
+    baseline = {node: coefficients[node]["intercept"] for node in dag.nodes()}
+
+    # Propagate interventional expectations in topological order.
+    interventional = dict(baseline)
+    for node in nx.topological_sort(dag):
+        if node in intervention_nodes:
+            interventional[node] = intervention_nodes[node]
+        else:
+            node_coefs = coefficients[node]
+            parents = [k for k in node_coefs if k not in _non_coef]
+            expected = node_coefs["intercept"]
+            for parent in parents:
+                # Mirror simulate_node: coefficient * (parent_value - parent_obs_mean)
+                expected += node_coefs[parent] * (interventional[parent] - baseline[parent])
+            interventional[node] = expected
+
+    effect = {node: interventional[node] - baseline[node] for node in output_nodes}
+
+    return {"baseline": baseline, "interventional": interventional, "effect": effect}
+
+
+def generate_indra_data(
+    ground_truth_dag,
+    num_incorrect_nodes=20,
+    num_incorrect_edges=40,
+    p_missing_real=0.0,
+    p_on_path=0.7,
+):
+    """
+    Generate INDRA-compatible data from a ground truth DAG by introducing incorrect
+    nodes/edges and simulating realistic integer evidence counts.
 
     Parameters
     ----------
     ground_truth_dag : nx.DiGraph
         The original DAG.
     num_incorrect_nodes : int
-        Number of incorrect nodes to add.
+        Number of spurious nodes (prefixed X) to add with one outgoing edge each.
     num_incorrect_edges : int
-        Number of incorrect edges to add.
+        Number of additional spurious edges to add between existing nodes.
+    p_missing_real : float
+        Probability that each ground-truth edge is excluded from the INDRA output,
+        simulating edges with no literature support. Excluded edges are absent from
+        both the returned graph and DataFrame.
+    p_on_path : float
+        Fraction of spurious nodes that are inserted *on* a source-to-sink path,
+        i.e. between two nodes u and v where (u, v) lies on such a path.
+        The remaining fraction get a single outgoing edge to a random existing node
+        (the previous behaviour). Default 0.7.
 
     Returns
     -------
-    nx.DiGraph
-        A modified DAG with incorrect nodes and edges.
+    modified_dag : nx.DiGraph
+        DAG containing ground-truth edges that survived the missingness draw,
+        plus all spurious nodes and edges.
+    edges_df : pd.DataFrame
+        Columns: source, target, ground_truth, evidence_count.
+        evidence_count is a discrete integer in [1, 300] drawn from a log-normal
+        distribution (true edges have higher median than false edges).
+    missing_edges : list of (str, str)
+        Ground-truth edges that were excluded from the INDRA output.
     """
-    modified_dag = ground_truth_dag.copy()
-    for u, v in modified_dag.edges():
-        modified_dag.edges[u, v]["ground_truth"] = True
+    modified_dag = nx.DiGraph()
 
-    existing_nodes = list(modified_dag.nodes)
+    # Add ground-truth edges, randomly dropping some to simulate INDRA gaps
+    missing_edges = []
+    for u, v in ground_truth_dag.edges():
+        if np.random.random() < p_missing_real:
+            missing_edges.append((u, v))
+        else:
+            modified_dag.add_edge(u, v)
+            modified_dag.edges[u, v]["ground_truth"] = True
 
-    # Add incorrect nodes
+    # Carry over any isolated ground-truth nodes that had all edges dropped
+    for node in ground_truth_dag.nodes():
+        if node not in modified_dag:
+            modified_dag.add_node(node)
+
+    existing_nodes = list(ground_truth_dag.nodes)
+
+    # Identify edges that lie on at least one source-to-sink path so that
+    # on-path spurious nodes can be inserted between real path nodes.
+    sources = [n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0]
+    sinks   = [n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0]
+
+    forward_reachable: set = set()
+    for s in sources:
+        forward_reachable.update(nx.descendants(ground_truth_dag, s) | {s})
+
+    reversed_dag = ground_truth_dag.reverse(copy=False)
+    backward_reachable: set = set()
+    for t in sinks:
+        backward_reachable.update(nx.descendants(reversed_dag, t) | {t})
+
+    path_edges = [
+        (u, v) for u, v in ground_truth_dag.edges()
+        if u in forward_reachable and v in backward_reachable
+    ]
+
+    # Add incorrect nodes.
+    # Majority (p_on_path) are inserted *between* two nodes on a real path,
+    # creating a spurious u → X → v shortcut that mimics an intermediate mediator.
+    # The rest receive a single outgoing edge to a random existing node.
     for i in range(num_incorrect_nodes):
         new_node = f"X{i}"
         modified_dag.add_node(new_node)
-        # Optionally connect the new node to existing nodes
-        if existing_nodes:
+        if path_edges and np.random.random() < p_on_path:
+            # Pick a random path edge and insert the fake node between its endpoints
+            u, v = path_edges[np.random.randint(len(path_edges))]
+            modified_dag.add_edge(u, new_node)
+            modified_dag.edges[u, new_node]["ground_truth"] = False
+            modified_dag.add_edge(new_node, v)
+            modified_dag.edges[new_node, v]["ground_truth"] = False
+        elif existing_nodes:
             target_node = np.random.choice(existing_nodes)
             modified_dag.add_edge(new_node, target_node)
             modified_dag.edges[new_node, target_node]["ground_truth"] = False
 
-    # Add incorrect edges
-    all_nodes = list(modified_dag.nodes)
+    # Add incorrect edges between existing (ground-truth) nodes only
     for _ in range(num_incorrect_edges):
-        src = np.random.choice(all_nodes)
-        dst = np.random.choice(all_nodes)
+        src = np.random.choice(existing_nodes)
+        dst = np.random.choice(existing_nodes)
         if src != dst and not modified_dag.has_edge(src, dst):
             modified_dag.add_edge(src, dst)
             modified_dag.edges[src, dst]["ground_truth"] = False
 
-    edges = list(modified_dag.edges)
-    for edge in edges:
-        gt_edge = modified_dag.edges[edge].get("ground_truth", None)
-        if gt_edge == True:
-            evidence = np.random.beta(1,1) #3,1.5
+    # Assign integer evidence counts drawn from log-normal distributions.
+    # True edges: lognormal(1.0, 1.5) → median ≈ 3, heavy tail up to 300.
+    # False edges: lognormal(0.0, 0.8) → median ≈ 1, mostly 1–5.
+    for u, v in modified_dag.edges():
+        is_true = modified_dag.edges[u, v].get("ground_truth", False)
+        if is_true:
+            raw = np.random.lognormal(mean=1.0, sigma=1.5)
         else:
-            evidence = np.random.beta(1,5)
-        modified_dag.edges[edge]["evidence_count"] = evidence
+            raw = np.random.lognormal(mean=0.0, sigma=0.8)
+        count = int(np.clip(np.round(raw), 1, 300))
+        modified_dag.edges[u, v]["evidence_count"] = count
 
-    # Convert modified_dag edges to a DataFrame
     edges_data = {
         'source': [],
         'target': [],
         'ground_truth': [],
-        'evidence_count': []
+        'evidence_count': [],
     }
-
     for u, v in modified_dag.edges():
         edges_data['source'].append(u)
         edges_data['target'].append(v)
@@ -117,7 +397,7 @@ def generate_indra_data(ground_truth_dag, num_incorrect_nodes=20, num_incorrect_
 
     edges_df = pd.DataFrame(edges_data)
 
-    return modified_dag, edges_df
+    return modified_dag, edges_df, missing_edges
 
 def run_graph_sim():
 
@@ -140,7 +420,7 @@ def run_graph_sim():
     # print(gt_dag.edges())
 
     print("Generating fake INDRA data...")
-    indra_nx, indra_data = generate_indra_data(gt_dag, num_incorrect_nodes=10, num_incorrect_edges=100)
+    indra_nx, indra_data, _ = generate_indra_data(gt_dag, num_incorrect_nodes=10, num_incorrect_edges=100)
     # pos = nx.spring_layout(indra_nx)
     # nx.draw(indra_nx, pos, with_labels=True, node_color='lightblue', node_size=500, arrowsize=20)
     # plt.title("Random DAG Visualization")

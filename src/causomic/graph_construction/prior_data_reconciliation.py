@@ -462,11 +462,13 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         data: pd.DataFrame,
         edge_priors: Optional[dict] = None,
         prior_strength: float = 1.0,
+        scale_with_n: bool = False,
         **kwargs,
     ):
         super(AICGaussIndraPriors, self).__init__(data, **kwargs)
         self.edge_priors = edge_priors or {}
         self.prior_strength = prior_strength  # This is lambda
+        self.scale_with_n = scale_with_n
 
     def local_score(self, variable: str, parents: list) -> float:
         """
@@ -493,12 +495,19 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         Score decomposition:
         - Base AIC: log-likelihood - (degrees_of_freedom + 2)
         - Prior bonus: Σ log(p/(1-p)) × prior_strength for each parent edge
-        - Final score: AIC - prior_bonus (subtraction because we return negative AIC)
+        - Final score: AIC + prior_bonus
 
         The log-odds formulation ensures that:
         - p > 0.5 gives positive bonus (encourages edge)
         - p < 0.5 gives negative bonus (discourages edge)
         - p = 0.5 gives zero bonus (neutral)
+
+        When scale_with_n=True, prior_bonus is additionally multiplied by log(n).
+        This anchors the prior to the BIC/AIC complexity-penalty scale: both the
+        penalty and the bonus grow as O(log n), while the data log-likelihood grows
+        as O(n).  The net effect is that the prior's influence relative to the
+        data signal shrinks as n increases, while remaining proportional to the
+        complexity penalty for any fixed n.
         """
         try:
             ll, df_model = self._log_likelihood(variable=variable, parents=parents)
@@ -519,7 +528,8 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
             prior_bonus += log_odds
 
         # prior_bonus *= self.prior_strength
-
+        # if self.scale_with_n:
+        #     prior_bonus *= np.log(self.data.shape[0])
         return aic_score + prior_bonus
 
 
@@ -582,11 +592,13 @@ class BICGaussIndraPriors(LogLikelihoodGauss):
         data: pd.DataFrame,
         edge_priors: Optional[dict] = None,
         prior_strength: float = 1.0,
+        scale_with_n: bool = False,
         **kwargs,
     ):
         super().__init__(data, **kwargs)
         self.edge_priors = edge_priors or {}
         self.prior_strength = prior_strength  # This is lambda
+        self.scale_with_n = scale_with_n
 
     def local_score(self, variable: str, parents: list) -> float:
         """
@@ -620,29 +632,16 @@ class BICGaussIndraPriors(LogLikelihoodGauss):
         making it more conservative in edge selection. This is beneficial when
         seeking interpretable, sparse causal networks.
 
+        When scale_with_n=True, prior_bonus is additionally multiplied by log(n).
+        This anchors the prior to the BIC complexity-penalty scale: both the
+        penalty and the bonus grow as O(log n), while the data log-likelihood grows
+        as O(n).  The net effect is that the prior's influence relative to the
+        data signal shrinks as n increases, while remaining proportional to the
+        complexity penalty for any fixed n.
+
         Error handling returns -inf for degenerate cases (singular covariance
         matrices, etc.) to exclude them from consideration.
         """
-
-        # try:
-        #     ll, df_model = self._log_likelihood(variable=variable, parents=parents)
-        # except:
-        #     # statsmodels will raise ValueError if X is singular
-        #     return -np.inf
-        
-        # n = self.data.shape[0]
-        
-        # # Base penalty for intercept + variance (the +2 terms)
-        # base_penalty = np.log(n)
-        
-        # # Per-parent penalty modulated by prior
-        # edge_penalty = 0
-        # for parent in parents:
-        #     p = self.edge_priors[(parent, variable)]
-        #     p = np.clip(p, 1e-6, 1 - 1e-6)
-        #     edge_penalty += (1 - p) * (np.log(n) / 2)
-        
-        # return ll - base_penalty - edge_penalty
         try:
             ll, df_model = self._log_likelihood(variable=variable, parents=parents)
         except:
@@ -660,10 +659,72 @@ class BICGaussIndraPriors(LogLikelihoodGauss):
             log_odds = np.log(p / (1 - p))
             prior_bonus += log_odds
 
-        # Scale edge prior for comparability with BIC penalty. This could use more investigation to find the optimal scaling factor.
-        prior_bonus *= self.prior_strength
-        # prior_bonus *= np.sqrt(self.data.shape[0])
+        # prior_bonus *= self.prior_strength
+        # if self.scale_with_n:
+        #     prior_bonus *= np.log(self.data.shape[0])
         return bic_score + prior_bonus
+
+
+class BICGaussNoPriors(LogLikelihoodGauss):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        edge_priors: Optional[dict] = None,
+        prior_strength: float = 1.0,
+        **kwargs,
+    ):
+        super().__init__(data, **kwargs)
+        self.edge_priors = edge_priors or {}
+        self.prior_strength = prior_strength  # This is lambda
+
+    def local_score(self, variable: str, parents: list) -> float:
+
+        try:
+            ll, df_model = self._log_likelihood(variable=variable, parents=parents)
+        except:
+            # statsmodels will raise ValueError if X is singular
+            return -np.inf
+
+        # Standard BIC score
+        bic_score = ll - (((df_model + 2) / 2) * np.log(self.data.shape[0]))
+
+        return bic_score
+    
+def random_acyclic_subgraph(nodes, allowed_edges, inclusion_prob=0.15, rng=None, max_indegree=2):
+    """Generate a random DAG by greedily adding allowed edges without creating cycles.
+    
+    Parameters
+    ----------
+    nodes : list
+        Node labels for the DAG
+    allowed_edges : iterable of (str, str)
+        Candidate edges to sample from
+    inclusion_prob : float, default=0.15
+        Probability of attempting to include each edge
+    rng : numpy Generator, optional
+        Random number generator for reproducibility
+    max_indegree : int, default=2
+        Maximum number of parents allowed per node
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    dag = DAG()
+    dag.add_nodes_from(nodes)
+
+    edges = list(allowed_edges)
+    rng.shuffle(edges)
+
+    for u, v in edges:
+        if rng.random() > inclusion_prob:
+            continue
+        if len(dag.get_parents(v)) >= max_indegree:
+            continue
+        dag.add_edge(u, v)
+        if not nx.is_directed_acyclic_graph(dag):
+            dag.remove_edge(u, v)
+
+    return dag
 
 def process_bootstrap(
     data: pd.DataFrame,
@@ -672,6 +733,8 @@ def process_bootstrap(
     score_fn: type,
     estimator: type,
     expert_knowledge: ExpertKnowledge,
+    seed: int = 0,
+    random_init: bool = False,
 ) -> Optional[DAG]:
     """
     Process single bootstrap sample for causal discovery with uncertainty quantification.
@@ -699,6 +762,12 @@ def process_bootstrap(
         Causal discovery algorithm class (typically SparseHillClimb)
     expert_knowledge : ExpertKnowledge
         Hard constraints on required/forbidden edges
+    seed : int, optional
+        Random seed for reproducible bootstrap resampling. Default is 0.
+    random_init : bool, optional
+        If True, initialize the hill climb search from a random acyclic subgraph
+        rather than an empty DAG. This can help escape local optima but increases
+        run-to-run variability. Default is False.
 
     Returns
     -------
@@ -732,21 +801,30 @@ def process_bootstrap(
     # Suppress INFO logs from pgmpy in this subprocess
     logging.getLogger("pgmpy").setLevel(logging.WARNING)
 
-    # resampled_data = data.sample(n=len(data), replace=True)
-    subsample_frac = 0.67  # try 0.5–0.8
-    resampled_data = data.sample(frac=subsample_frac, replace=False, random_state=None)
+    rng = np.random.RandomState(seed)
+    subsample_frac = 0.65  # try 0.5–0.8
+    resampled_data = data.sample(frac=subsample_frac, replace=True, random_state=rng)
 
     # Initialize the custom scoring function
     custom_score = score_fn(resampled_data, edge_priors=edge_priors, prior_strength=prior_strength)
 
     allowed = set(edge_priors.keys())
     est = estimator(data=resampled_data, allowed_additions=allowed)
+    
+    start_dag = None
+    if random_init:
+        nodes = list(resampled_data.columns)
+        start_dag = random_acyclic_subgraph(
+                nodes, allowed, 0.15, np.random.default_rng(seed)
+            )
+    
     # Estimate the DAG using the custom scoring function
     estimated_dag = est.estimate(
         scoring_method=custom_score,
+        start_dag=start_dag,
         expert_knowledge=expert_knowledge,
-        max_indegree=5,
-        epsilon=0.01,
+        max_indegree=3,
+        epsilon=0.0001,
         show_progress=False,
     )
     return estimated_dag
@@ -907,8 +985,9 @@ def prepare_indra_priors(indra_priors: pd.DataFrame,
         # edge_probability_mapper = calculate_edge_probabilities(indra_priors, count_col)
         # indra_priors["edge_p"] = indra_priors[count_col].map(edge_probability_mapper).fillna(1.0)
         log_ev = np.log1p(indra_priors[count_col])
-        median_log_ev = np.median(log_ev)
-        indra_priors["edge_p"] = 1 / (1 + np.exp(-2 * (log_ev - median_log_ev)))
+        # median_log_ev = np.median(log_ev)
+        # Values extracted from all INDRA HGNC edges
+        indra_priors["edge_p"] = 1 / (1 + np.exp(-(log_ev - 1.1) / 0.552))
 
     else:
         indra_priors["edge_p"] = indra_priors[count_col]
@@ -1019,6 +1098,7 @@ def run_bootstrap(
     n_bootstrap: int = 100,
     convert_to_probability: bool = True,
     use_source_counts: bool = False,
+    random_init: bool = False,
 ) -> list:
     """
     Run parallel bootstrap analysis for robust causal discovery with INDRA priors.
@@ -1057,6 +1137,9 @@ def run_bootstrap(
         Number of bootstrap samples to generate for uncertainty quantification
     convert_to_probability : bool
         If True, convert INDRA evidence counts to edge probabilities using power law modeling
+    random_init : bool, optional
+        If True, initialize each bootstrap hill climb from a random acyclic subgraph
+        rather than an empty DAG. Default is False.
 
     Returns
     -------
@@ -1131,7 +1214,9 @@ def run_bootstrap(
 
     print("INFO: Calculating edge probabilities.")
 
-    edge_probabilities = prepare_indra_priors(updated_indra_priors, convert_to_probability, use_source_counts)
+    edge_probabilities = prepare_indra_priors(updated_indra_priors, 
+                                              convert_to_probability, 
+                                              use_source_counts)
 
     print("INFO: Running bootstrap.")
     bootstrap_dags = Parallel(n_jobs=-2)(
@@ -1142,8 +1227,10 @@ def run_bootstrap(
             scoring_function,
             search_algorithm,
             expert_knowledge,
+            seed=i,
+            random_init=random_init,
         )
-        for _ in tqdm(range(n_bootstrap), desc="Hill Climb Bootstraps")
+        for i in tqdm(range(n_bootstrap), desc="Hill Climb Bootstraps")
     )
     # for _ in range(n_bootstrap):
     #     process_bootstrap(
@@ -1163,19 +1250,22 @@ def main():
     import pickle
     import time
 
-    with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
-        model_input = pickle.load(f)
+    # with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
+    # with open("/mnt/f/OneDrive - Northeastern University/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
+    #     model_input = pickle.load(f)
     
-    model_input = list(model_input)
-    model_input[3] = BICGaussIndraPriors
-    model_input[1].rename(columns={"source_symbol": "source", "target_symbol": "target"}, inplace=True)
+    # model_input = list(model_input)
+    # model_input[3] = BICGaussIndraPriors
+    # model_input[1].rename(columns={"source_symbol": "source", "target_symbol": "target"}, inplace=True)
     
-    model_input.append(False)
-    model_input = tuple(model_input)
-    start_time = time.time()
-    bootstrap_dags = run_bootstrap(*model_input, n_bootstrap=50)
-    end_time = time.time()
-    print(f"Time taken: {end_time - start_time} seconds")
+    # model_input.append(False)
+    # model_input = tuple(model_input)
+    # start_time = time.time()
+    # bootstrap_dags = run_bootstrap(*model_input, n_bootstrap=50)
+    # end_time = time.time()
+    # print(f"Time taken: {end_time - start_time} seconds")
+
+
 
 
 if __name__ == "__main__":
