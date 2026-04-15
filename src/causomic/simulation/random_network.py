@@ -272,6 +272,7 @@ def generate_indra_data(
     num_incorrect_edges=40,
     p_missing_real=0.0,
     p_on_path=0.7,
+    p_mediated_shortcut=0.0,
 ):
     """
     Generate INDRA-compatible data from a ground truth DAG by introducing incorrect
@@ -294,6 +295,12 @@ def generate_indra_data(
         i.e. between two nodes u and v where (u, v) lies on such a path.
         The remaining fraction get a single outgoing edge to a random existing node
         (the previous behaviour). Default 0.7.
+    p_mediated_shortcut : float
+        Probability of adding a spurious direct edge from u to v for every pair
+        (u, v) connected by a path of length >= 2 in the ground-truth DAG (i.e.
+        through at least one mediator node).  Mimics the tendency of literature
+        databases to report a direct association when only an indirect mechanism
+        has been characterised.  Default 0.0 (disabled).
 
     Returns
     -------
@@ -371,6 +378,25 @@ def generate_indra_data(
             modified_dag.add_edge(src, dst)
             modified_dag.edges[src, dst]["ground_truth"] = False
 
+    # Add spurious mediated-shortcut edges.
+    # For every pair (u, v) reachable via a path of length >= 2 in the
+    # ground-truth DAG (i.e. through at least one intermediate node), add a
+    # direct u -> v edge with probability p_mediated_shortcut.  These edges are
+    # "plausible" false positives because the indirect association is real, but
+    # a direct mechanism has not been established.
+    if p_mediated_shortcut > 0.0:
+        for u in ground_truth_dag.nodes():
+            for v in ground_truth_dag.nodes():
+                if u == v or modified_dag.has_edge(u, v):
+                    continue
+                try:
+                    path_len = nx.shortest_path_length(ground_truth_dag, u, v)
+                except nx.NetworkXNoPath:
+                    continue
+                if path_len >= 2 and np.random.random() < p_mediated_shortcut:
+                    modified_dag.add_edge(u, v)
+                    modified_dag.edges[u, v]["ground_truth"] = False
+
     # Assign integer evidence counts drawn from log-normal distributions.
     # True edges: lognormal(1.0, 1.5) → median ≈ 3, heavy tail up to 300.
     # False edges: lognormal(0.0, 0.8) → median ≈ 1, mostly 1–5.
@@ -398,6 +424,40 @@ def generate_indra_data(
     edges_df = pd.DataFrame(edges_data)
 
     return modified_dag, edges_df, missing_edges
+
+def indra_dag_to_evidence_graph(indra_dag: nx.DiGraph) -> nx.DiGraph:
+    """
+    Convert a simulated INDRA DiGraph (from generate_indra_data) to the
+    evidence-annotated format expected by repair_confounding / query_confounders.
+
+    generate_indra_data stores a plain ``evidence_count`` integer on each edge.
+    repair_confounding's internal query_confounders reads
+    ``edge["evidence"]["total_evidence"]`` and ``edge["evidence"]["source_evidence"]``,
+    which is the format produced by add_evidence_info for real INDRA graphs.
+    This function bridges the gap so simulated data can be passed directly to
+    repair_confounding.
+
+    Parameters
+    ----------
+    indra_dag : nx.DiGraph
+        Graph returned as the first element of generate_indra_data(), with
+        edges carrying an ``evidence_count`` integer attribute.
+
+    Returns
+    -------
+    nx.DiGraph
+        A copy of indra_dag where each edge additionally carries an
+        ``evidence`` dict: ``{"total_evidence": N, "source_evidence": 1}``.
+    """
+    g = indra_dag.copy()
+    for u, v in g.edges():
+        ev = g[u][v].get("evidence_count", 0)
+        g[u][v]["evidence"] = {
+            "total_evidence": ev,
+            "source_evidence": 1,  # simulation has no source-count tracking
+        }
+    return g
+
 
 def run_graph_sim():
 
