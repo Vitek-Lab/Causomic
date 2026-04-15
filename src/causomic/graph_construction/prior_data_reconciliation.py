@@ -542,7 +542,7 @@ class AICGaussNoPriors(LogLikelihoodGauss):
         scale_with_n: bool = False,
         **kwargs,
     ):
-        super(AICGaussIndraPriors, self).__init__(data, **kwargs)
+        super(AICGaussNoPriors, self).__init__(data, **kwargs)
         self.edge_priors = edge_priors or {}
         self.prior_strength = prior_strength  # This is lambda
         self.scale_with_n = scale_with_n
