@@ -26,6 +26,7 @@ import torch
 from causomic.causal_model.LVM import LVM
 from causomic.graph_construction.prior_data_reconciliation import (
     AICGaussIndraPriors,
+    AICGaussNoPriors,
     BICGaussIndraPriors,
     BICGaussNoPriors,
     SparseHillClimb,
@@ -421,10 +422,10 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _DAG_PARAMS = dict(
-    n_start=30,
+    n_start=20,
     n_end=8,
     max_mediators=3,
-    shared_mediator_prob=0.2,
+    shared_mediator_prob=0.3,
     confounder_prob=0.0,
 )
 
@@ -483,30 +484,30 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
     # ── Sample-size sweep (BICGaussIndraPriors, moderate noise) ──────────
     BenchmarkConfig(
-        name="BICGaussNoPriors_low_replicates",
+        name="AICGaussNoPriors_low_replicates",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=1.0,
         fake_edge_multiplier=2.0,
         n_samples=_N_LOW,
-        scoring_function=BICGaussNoPriors,
+        scoring_function=AICGaussNoPriors,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
-        name="BICGaussNoPriors_mid_replicates",
+        name="AICGaussNoPriors_mid_replicates",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=1.0,
         fake_edge_multiplier=2.0,
         n_samples=_N_MID,
-        scoring_function=BICGaussNoPriors,
+        scoring_function=AICGaussNoPriors,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
-        name="BICGaussNoPriors_high_replicates",
+        name="AICGaussNoPriors_high_replicates",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=1.0,
         fake_edge_multiplier=2.0,
         n_samples=_N_HIGH,
-        scoring_function=BICGaussNoPriors,
+        scoring_function=AICGaussNoPriors,
         seeds=_SEEDS,
     ),
 ]
