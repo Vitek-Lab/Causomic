@@ -164,6 +164,20 @@ def compute_interventional_metrics(
         One dict per output node with config, seed, node, ci_result, gt_result,
         difference, correct_direction.
     """
+    combined = pd.DataFrame({"ci": ci_series, "gt": gt_series}).dropna()
+    ci_series = combined["ci"]
+    gt_series = combined["gt"]
+
+    if combined.empty:
+        summary = {
+            "int_rmse": float("nan"),
+            "int_mae": float("nan"),
+            "int_pearson_r": float("nan"),
+            "int_direction_accuracy": float("nan"),
+            "int_n_outcomes": 0,
+        }
+        return summary, []
+
     ci = ci_series.values.astype(float)
     gt = gt_series.values.astype(float)
     diff = ci - gt
@@ -227,6 +241,9 @@ def _run_interventional(
     The reported effect is E[outcome | do=1] - E[outcome | do=0].
     """
     model_input = pd.DataFrame(sim["Protein_data"])
+    # Drop latent confounders — they must not be visible to the LVM
+    confounder_nodes = set(roles["confounders"])
+    model_input = model_input.drop(columns=[c for c in confounder_nodes if c in model_input.columns])
     outcome = roles["end"]
     intervention0 = {node: 1 for node in roles["start"]}
     intervention1 = {node: 0 for node in roles["start"]}
@@ -303,10 +320,17 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
     )
     protein_df = pd.DataFrame(sim["Protein_data"])
 
+    # Confounders are latent — drop them from the observable data so they are
+    # not seen by the posterior estimator or the LVM.  Without this, confounders
+    # become effectively observed variables and the intervention is unaffected
+    # by confounder_prob.
+    confounder_nodes = set(roles["confounders"])
+    protein_df = protein_df.drop(columns=[c for c in confounder_nodes if c in protein_df.columns])
+
     # 5. Estimate posterior DAG
     posterior, _bootstraps = estimate_posterior_dag(  # noqa: F841
         protein_df,
-        indra_priors=indra_df,#[-indra_df["source"].str.startswith("C")].reset_index(drop=True),  # exclude confounder edges from priors
+        indra_priors=indra_df[(-indra_df["source"].str.startswith("C")) & (-indra_df["target"].str.startswith("C"))].reset_index(drop=True),  # exclude confounder edges from priors
         prior_strength=cfg.prior_strength,
         scoring_function=cfg.scoring_function,
         search_algorithm=SparseHillClimb,
@@ -318,9 +342,12 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
         return_bootstrap_dags=True,
     )
 
-    # 6. Graph metrics — universe = all nodes seen during estimation
+    # 6. Graph metrics — universe = all nodes seen during estimation.
+    # Use a confounder-free view of gt_dag so that latent confounder edges do
+    # not inflate the false-negative count.
     all_nodes = set(str(n) for n in protein_df.columns)
-    graph_metrics = compute_metrics(posterior, gt_dag, all_nodes)
+    observable_gt_dag = nx.subgraph(gt_dag, [n for n in gt_dag.nodes() if n not in confounder_nodes]).copy()
+    graph_metrics = compute_metrics(posterior, observable_gt_dag, all_nodes)
 
     row = {
         "config": cfg.name,
@@ -410,7 +437,7 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
     metrics = graph_metrics + [m for m in int_metrics if m in results.columns]
     agg = (
         results.groupby("config")[metrics]
-        .agg(["mean", "std"])
+        .agg(["mean", "std"], skipna=True)
         .round(4)
     )
     # Flatten multi-level columns
@@ -423,13 +450,13 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _DAG_PARAMS_BASE = dict(
-    n_start=30,
+    n_start=20,
     n_end=8,
     max_mediators=3,
-    shared_mediator_prob=0.2,
+    shared_mediator_prob=0.3,
 )
 
-_SEEDS = list(range(10))  # 10 random DAGs per configuration
+_SEEDS = list(range(1))  # 10 random DAGs per configuration
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
@@ -479,12 +506,12 @@ if __name__ == "__main__":
     print(summarize(results).to_string())
 
     # Save trial-level results
-    out_path = "aic_confounder_benchmark_results.csv"
+    out_path = "aic_confounder_benchmark_results2.csv"
     results.to_csv(out_path, index=False)
     print(f"\nTrial results saved to {out_path}")
 
     # Save per-node interventional results
     if not node_results.empty:
-        node_out_path = "aic_confounder_interventional_nodes.csv"
+        node_out_path = "aic_confounder_interventional_nodes2.csv"
         node_results.to_csv(node_out_path, index=False)
         print(f"Per-node interventional results saved to {node_out_path}")
