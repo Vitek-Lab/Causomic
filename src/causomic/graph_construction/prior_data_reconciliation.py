@@ -532,6 +532,33 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         #     prior_bonus *= np.log(self.data.shape[0])
         return aic_score + prior_bonus
 
+class AICGaussNoPriors(LogLikelihoodGauss):
+
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        edge_priors: Optional[dict] = None,
+        prior_strength: float = 1.0,
+        scale_with_n: bool = False,
+        **kwargs,
+    ):
+        super(AICGaussIndraPriors, self).__init__(data, **kwargs)
+        self.edge_priors = edge_priors or {}
+        self.prior_strength = prior_strength  # This is lambda
+        self.scale_with_n = scale_with_n
+
+    def local_score(self, variable: str, parents: list) -> float:
+
+        try:
+            ll, df_model = self._log_likelihood(variable=variable, parents=parents)
+        except:
+            # statsmodels will raise ValueError if X is singular
+            return -np.inf
+
+        # Standard AIC score
+        aic_score = ll - (df_model + 2)
+
+        return aic_score
 
 class BICGaussIndraPriors(LogLikelihoodGauss):
     """
