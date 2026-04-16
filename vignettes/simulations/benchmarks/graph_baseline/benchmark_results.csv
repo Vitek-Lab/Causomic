@@ -1,0 +1,2 @@
+config,seed,n_nodes,n_edges,n_start,n_end,n_noise_vars,n_hc_edges_total,n_hc_edges_real,precision,recall,f1,accuracy,tp,fp,fn,tn,n_pred_edges,n_gt_edges,int_rmse,int_mae,int_pearson_r,int_direction_accuracy,int_n_outcomes
+hillclimb_mid_replicates,0,65,85,20,8,20,156,122,0.22950819672131148,0.32941176470588235,0.27053140096618356,0.963701923076923,28,94,57,3981,122,85,0.5570763112628461,0.4446360817044849,0.45832071669036695,0.625,8
