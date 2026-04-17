@@ -301,6 +301,58 @@ def filtered_paths(
     # works for Graph/DiGraph/Multi(Di)Graph (paths are node sequences)
     yield from nx.all_simple_paths(view, source, target, cutoff=cutoff)
 
+
+def _bfs_all_dists_forward(
+    graph: nx.DiGraph, source: str, cutoff: int, thr: int, src_thr: int
+) -> dict:
+    """BFS forward from source; returns {node: set of hop-distances from source}.
+
+    Tracks all reachable distances (not just shortest) so that edges on longer
+    sub-paths are not missed when checking path membership.
+    """
+    from collections import deque
+    dists: dict = {source: {0}}
+    q = deque([(source, 0)])
+    while q:
+        u, d = q.popleft()
+        if d >= cutoff:
+            continue
+        for v in graph.successors(u):
+            if edge_ok(graph, u, v, thr, src_thr):
+                nd = d + 1
+                if v not in dists:
+                    dists[v] = set()
+                if nd not in dists[v]:
+                    dists[v].add(nd)
+                    q.append((v, nd))
+    return dists
+
+
+def _bfs_all_dists_backward(
+    graph: nx.DiGraph, target: str, cutoff: int, thr: int, src_thr: int
+) -> dict:
+    """BFS backward from target; returns {node: set of hop-distances to target}.
+
+    Traverses predecessor edges so distances represent hops remaining to reach
+    target on a forward path.
+    """
+    from collections import deque
+    dists: dict = {target: {0}}
+    q = deque([(target, 0)])
+    while q:
+        v, d = q.popleft()
+        if d >= cutoff:
+            continue
+        for u in graph.predecessors(v):
+            if edge_ok(graph, u, v, thr, src_thr):
+                nd = d + 1
+                if u not in dists:
+                    dists[u] = set()
+                if nd not in dists[u]:
+                    dists[u].add(nd)
+                    q.append((u, nd))
+    return dists
+
 def query_drug_targets(graph: nx.DiGraph, 
                        drug: str,
                        target_ev_filter: int = 1,
@@ -464,41 +516,44 @@ def query_forward_paths(
     if len(med_src_filter) != (n_mediators + 1):
         raise ValueError("med_src_filter must have length n_mediators + 1")
 
-    paths = []
+    end_nodes_list = list(end_nodes)
+    seen_edges: set = set()
+    forward_edge_list: List[tuple] = []
+
     for start in tqdm(list(start_nodes), desc="Processing start nodes"):
         if start not in graph.nodes:
             print(f"Start node '{start}' is missing from graph. Skipping.")
             continue
 
-        for end in end_nodes:
+        for end in end_nodes_list:
             for med in range(0, n_mediators + 1):
+                cutoff = med + 1
                 thr = med_ev_filter[med]
                 src_thr = med_src_filter[med]
-                all_paths = list(
-                    filtered_paths(
-                        graph,
-                        source=start,
-                        target=end,
-                        cutoff=med + 1,
-                        thr=thr,
-                        src_thr=src_thr,
-                    )
-                )
-                if all_paths:
-                    paths.extend(all_paths)
 
-    # Flatten list of paths for extraction into df (already flattened by extend)
-    forward_edge_list: List[tuple] = []
-    for path in tqdm(paths, desc="Extracting paths into dataframe"):
-        for i in range(len(path) - 1):
-            u, v = path[i], path[i + 1]
-            edge = graph[u][v]
-            forward_edge_list.append(
-                (u, v, 
-                 edge["evidence"]["total_evidence"], 
-                 edge["evidence"]["source_evidence"],
-                 edge["evidence"]["stmt_type"])
-            )
+                fwd = _bfs_all_dists_forward(graph, start, cutoff, thr, src_thr)
+                bwd = _bfs_all_dists_backward(graph, end, cutoff, thr, src_thr)
+
+                for u, v, edata in graph.edges(data=True):
+                    if (u, v) in seen_edges:
+                        continue
+                    if u not in fwd or v not in bwd:
+                        continue
+                    if not edge_ok(graph, u, v, thr, src_thr):
+                        continue
+                    if any(
+                        d1 + 1 + d2 == cutoff
+                        for d1 in fwd[u]
+                        for d2 in bwd[v]
+                    ):
+                        seen_edges.add((u, v))
+                        ev = edata["evidence"]
+                        forward_edge_list.append(
+                            (u, v,
+                             ev["total_evidence"],
+                             ev["source_evidence"],
+                             ev["stmt_type"])
+                        )
 
     forward_df = pd.DataFrame(
         forward_edge_list, columns=["source", "target", "evidence_count", 
