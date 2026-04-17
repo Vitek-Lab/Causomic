@@ -468,47 +468,6 @@ def query_effect_nodes(
     return result_df
     
 
-_worker_graph: Optional[nx.DiGraph] = None
-
-
-def _init_worker(graph: nx.DiGraph) -> None:
-    global _worker_graph
-    _worker_graph = graph
-
-
-def _process_start_node(
-    args: tuple,
-) -> List[tuple]:
-    start, end_nodes_list, n_mediators, med_ev_filter, med_src_filter = args
-    graph = _worker_graph
-    if start not in graph.nodes:
-        return []
-
-    local_seen: set = set()
-    results: List[tuple] = []
-    for end in end_nodes_list:
-        for med in range(n_mediators + 1):
-            cutoff = med + 1
-            thr = med_ev_filter[med]
-            src_thr = med_src_filter[med]
-            fwd = _bfs_all_dists_forward(graph, start, cutoff, thr, src_thr)
-            bwd = _bfs_all_dists_backward(graph, end, cutoff, thr, src_thr)
-            for u, v, edata in graph.edges(data=True):
-                if u == v or (u, v) in local_seen:
-                    continue
-                if u not in fwd or v not in bwd:
-                    continue
-                if not edge_ok(graph, u, v, thr, src_thr):
-                    continue
-                if any(d1 + 1 + d2 == cutoff for d1 in fwd[u] for d2 in bwd[v]):
-                    local_seen.add((u, v))
-                    ev = edata["evidence"]
-                    results.append(
-                        (u, v, ev["total_evidence"], ev["source_evidence"], ev["stmt_type"])
-                    )
-    return results
-
-
 def query_forward_paths(
     graph: nx.DiGraph,
     start_nodes: Iterable[str],
@@ -516,7 +475,6 @@ def query_forward_paths(
     n_mediators: int = 1,
     med_ev_filter: Optional[List[int]] = None,
     med_src_filter: Optional[List[int]] = None,
-    n_workers: Optional[int] = None,
 ) -> pd.DataFrame:
     """Search for simple forward paths from any start node to any end node.
 
@@ -536,14 +494,12 @@ def query_forward_paths(
         med_src_filter: Optional list of integer source count thresholds with
             length ``n_mediators + 1`` where index ``i`` applies to paths with
             ``i`` mediators. If None, defaults to all ones.
-        n_workers: Number of worker processes. Defaults to os.cpu_count().
 
     Returns:
         A pandas.DataFrame with rows for each edge that appears on any
         discovered path. Columns: ["source", "target", "evidence_count",
         "source_count"].
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     if med_ev_filter is None:
         med_ev_filter = [1] * (n_mediators + 1)
@@ -561,29 +517,45 @@ def query_forward_paths(
         raise ValueError("med_src_filter must have length n_mediators + 1")
 
     end_nodes_list = list(end_nodes)
-    start_nodes_list = list(start_nodes)
-    for s in start_nodes_list:
-        if s not in graph.nodes:
-            print(f"Start node '{s}' is missing from graph. Skipping.")
-    start_nodes_list = [s for s in start_nodes_list if s in graph.nodes]
-
-    args_list = [
-        (start, end_nodes_list, n_mediators, med_ev_filter, med_src_filter)
-        for start in start_nodes_list
-    ]
-
     seen_edges: set = set()
     forward_edge_list: List[tuple] = []
 
-    with ProcessPoolExecutor(
-        max_workers=n_workers, initializer=_init_worker, initargs=(graph,)
-    ) as executor:
-        futures = {executor.submit(_process_start_node, args): args[0] for args in args_list}
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing start nodes"):
-            for row in future.result():
-                if (row[0], row[1]) not in seen_edges:
-                    seen_edges.add((row[0], row[1]))
-                    forward_edge_list.append(row)
+    for start in tqdm(list(start_nodes), desc="Processing start nodes"):
+        if start not in graph.nodes:
+            print(f"Start node '{start}' is missing from graph. Skipping.")
+            continue
+
+        for end in end_nodes_list:
+            for med in range(0, n_mediators + 1):
+                cutoff = med + 1
+                thr = med_ev_filter[med]
+                src_thr = med_src_filter[med]
+
+                fwd = _bfs_all_dists_forward(graph, start, cutoff, thr, src_thr)
+                bwd = _bfs_all_dists_backward(graph, end, cutoff, thr, src_thr)
+
+                for u, v, edata in graph.edges(data=True):
+                    if u == v:
+                        continue
+                    if (u, v) in seen_edges:
+                        continue
+                    if u not in fwd or v not in bwd:
+                        continue
+                    if not edge_ok(graph, u, v, thr, src_thr):
+                        continue
+                    if any(
+                        d1 + 1 + d2 == cutoff
+                        for d1 in fwd[u]
+                        for d2 in bwd[v]
+                    ):
+                        seen_edges.add((u, v))
+                        ev = edata["evidence"]
+                        forward_edge_list.append(
+                            (u, v,
+                             ev["total_evidence"],
+                             ev["source_evidence"],
+                             ev["stmt_type"])
+                        )
 
     forward_df = pd.DataFrame(
         forward_edge_list, columns=["source", "target", "evidence_count", 
