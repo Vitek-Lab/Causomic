@@ -10,10 +10,10 @@ Sweeps:
      missing direct evidence.
 
 Fixed settings for all configs:
-  - Scoring function : AICGaussIndraPriors
-  - Noise level      : moderate (fake_node_multiplier=1.0, fake_edge_multiplier=2.0)
-  - Replicates       : 250 samples per simulation
-  - Seeds            : 10 random DAGs per configuration
+  - Scoring function : BICGaussIndraPriors
+  - Noise level      : moderate (fake_node_multiplier=2.0, fake_edge_multiplier=5.0)
+  - Replicates       : 200 samples per simulation
+  - Seeds            : 30 random DAGs per configuration
 
 To add new parameter sweeps, add entries to BENCHMARK_CONFIGS at the bottom.
 """
@@ -33,7 +33,7 @@ import torch
 
 from causomic.causal_model.LVM import LVM
 from causomic.graph_construction.prior_data_reconciliation import (
-    AICGaussIndraPriors,
+    BICGaussIndraPriors,
     SparseHillClimb,
 )
 from causomic.network import estimate_posterior_dag
@@ -61,11 +61,12 @@ class BenchmarkConfig:
 
     # DAG generation params
     dag_params: dict = field(default_factory=lambda: dict(
-        n_start=30,
-        n_end=8,
+        n_start=20,
+        n_end=10,
         max_mediators=3,
-        shared_mediator_prob=0.5,
-        confounder_prob=0.00,
+        shared_mediator_prob=0.4,
+        confounder_prob=0.0,
+        end_node_alpha=0.8,
     ))
 
     # INDRA noise multipliers (relative to real graph size)
@@ -80,7 +81,7 @@ class BenchmarkConfig:
     n_samples: int = 200
 
     # Posterior estimation params
-    scoring_function: type = AICGaussIndraPriors
+    scoring_function: type = BICGaussIndraPriors
     prior_strength: float = 5.0
     n_bootstrap: int = 100
     edge_probability: float = 0.5
@@ -88,7 +89,7 @@ class BenchmarkConfig:
     corr_threshold: float = 0.5
 
     # Seeds to run
-    seeds: list[int] = field(default_factory=lambda: list(range(10)))
+    seeds: list[int] = field(default_factory=lambda: list(range(30)))
 
     # Interventional benchmark
     run_interventional: bool = True
@@ -291,6 +292,7 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
         num_incorrect_edges=n_fake_edges,
         p_missing_real=cfg.p_missing_real,
         p_mediated_shortcut=cfg.p_mediated_shortcut,
+        preferential_attachment=True,
     )
 
     # 3. Augment simulation graph: add spurious nodes (isolated, no edges)
@@ -420,7 +422,7 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
     metrics = graph_metrics + [m for m in int_metrics if m in results.columns]
     agg = (
         results.groupby("config")[metrics]
-        .agg(["mean", "std"])
+        .agg(["mean", "std"], skipna=True)
         .round(4)
     )
     agg.columns = ["_".join(c) for c in agg.columns]
@@ -433,27 +435,23 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 
 _DAG_PARAMS = dict(
     n_start=20,
-    n_end=8,
+    n_end=10,
     max_mediators=3,
-    shared_mediator_prob=0.3,
-    confounder_prob=0.00,
+    shared_mediator_prob=0.4,
+    confounder_prob=0.0,
+    end_node_alpha=0.8,
 )
 
-_SEEDS = list(range(10))  # 10 random DAGs per configuration
+_SEEDS = list(range(30))
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
     # ── Sweep 1: missing real edges only ────────────────────────────────────
     BenchmarkConfig(
-        name="missing_0pct",
-        dag_params=_DAG_PARAMS,
-        p_missing_real=0.0,
-        p_mediated_shortcut=0.0,
-        seeds=_SEEDS,
-    ),
-    BenchmarkConfig(
         name="missing_20pct",
         dag_params=_DAG_PARAMS,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         p_missing_real=0.2,
         p_mediated_shortcut=0.0,
         seeds=_SEEDS,
@@ -461,6 +459,8 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
         name="missing_50pct",
         dag_params=_DAG_PARAMS,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         p_missing_real=0.5,
         p_mediated_shortcut=0.0,
         seeds=_SEEDS,
@@ -470,6 +470,8 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
         name="missing_20pct_shortcut_30pct",
         dag_params=_DAG_PARAMS,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         p_missing_real=0.2,
         p_mediated_shortcut=0.3,
         seeds=_SEEDS,
@@ -477,6 +479,8 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
         name="missing_50pct_shortcut_30pct",
         dag_params=_DAG_PARAMS,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         p_missing_real=0.5,
         p_mediated_shortcut=0.3,
         seeds=_SEEDS,
@@ -502,12 +506,12 @@ if __name__ == "__main__":
     print(summarize(results).to_string())
 
     # Save trial-level results
-    out_path = "aic_edge_benchmark_results.csv"
+    out_path = "missing_edge_benchmark_results.csv"
     results.to_csv(out_path, index=False)
     print(f"\nTrial results saved to {out_path}")
 
     # Save per-node interventional results
     if not node_results.empty:
-        node_out_path = "aic_edge_interventional_nodes.csv"
+        node_out_path = "missing_edge_interventional_nodes.csv"
         node_results.to_csv(node_out_path, index=False)
         print(f"Per-node interventional results saved to {node_out_path}")

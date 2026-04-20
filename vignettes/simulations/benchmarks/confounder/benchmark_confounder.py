@@ -301,7 +301,8 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
         num_incorrect_nodes=n_fake_nodes,
         num_incorrect_edges=n_fake_edges,
         p_missing_real=0.0,
-        p_mediated_shortcut=cfg.p_mediated_shortcut,
+        p_mediated_shortcut=0.1,
+        preferential_attachment=True,
     )
 
     # 3. Augment simulation graph: add spurious nodes (isolated, no edges)
@@ -451,12 +452,14 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 
 _DAG_PARAMS_BASE = dict(
     n_start=20,
-    n_end=8,
+    n_end=10,
     max_mediators=3,
-    shared_mediator_prob=0.3,
+    shared_mediator_prob=0.4,
+    confounder_prob=0.0,
+    end_node_alpha=0.8,
 )
 
-_SEEDS = list(range(1))  # 10 random DAGs per configuration
+_SEEDS = list(range(30))  # 10 random DAGs per configuration
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
@@ -464,25 +467,25 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
         name="confounder_prob_0.1",
         dag_params={**_DAG_PARAMS_BASE, "confounder_prob": 0.1},
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=2.0,
-        scoring_function=AICGaussIndraPriors,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
+        scoring_function=BICGaussIndraPriors,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
         name="confounder_prob_0.2",
         dag_params={**_DAG_PARAMS_BASE, "confounder_prob": 0.2},
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=2.0,
-        scoring_function=AICGaussIndraPriors,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
+        scoring_function=BICGaussIndraPriors,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
         name="confounder_prob_0.5",
         dag_params={**_DAG_PARAMS_BASE, "confounder_prob": 0.5},
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=2.0,
-        scoring_function=AICGaussIndraPriors,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
+        scoring_function=BICGaussIndraPriors,
         seeds=_SEEDS,
     ),
 ]
@@ -506,12 +509,12 @@ if __name__ == "__main__":
     print(summarize(results).to_string())
 
     # Save trial-level results
-    out_path = "aic_confounder_benchmark_results2.csv"
+    out_path = "confounder_benchmark_results.csv"
     results.to_csv(out_path, index=False)
     print(f"\nTrial results saved to {out_path}")
 
     # Save per-node interventional results
     if not node_results.empty:
-        node_out_path = "aic_confounder_interventional_nodes2.csv"
+        node_out_path = "confounder_benchmark_interventional_nodes.csv"
         node_results.to_csv(node_out_path, index=False)
         print(f"Per-node interventional results saved to {node_out_path}")
