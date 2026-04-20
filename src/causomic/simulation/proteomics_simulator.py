@@ -225,7 +225,7 @@ def simulate_data(
                 if node != "Output":
                     data[node] += np.random.normal(0, 1, n)
         else:
-            data[error_node] += np.random.normal(0, 5, n)
+            data[error_node] += np.random.normal(0, 2.5, n)
 
     # break data into features
     if add_feature_var:

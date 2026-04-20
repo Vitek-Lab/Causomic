@@ -396,6 +396,8 @@ def estimate_posterior_dag(
     - Failed bootstrap runs (returning None) are excluded from probability calculations
     """
 
+    indra_priors = indra_priors.reset_index(drop=True)
+    
     # Extract unique nodes from prior network and clean names
     nodes = pd.unique(indra_priors[["source", "target"]].values.ravel())
     nodes = np.array([node.replace("-", "") for node in nodes])
@@ -406,13 +408,13 @@ def estimate_posterior_dag(
     ]
 
     # Extract observed edges from prior network
-    obs_edges = [
+    obs_edges = {
         (
             indra_priors.loc[i, "source"].replace("-", ""),
             indra_priors.loc[i, "target"].replace("-", ""),
         )
         for i in range(len(indra_priors))
-    ]
+    }
 
     # Define forbidden edges as all edges not in the prior network
     forbidden_edges = [edge for edge in all_possible_edges if edge not in obs_edges]

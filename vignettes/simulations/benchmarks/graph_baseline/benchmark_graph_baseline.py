@@ -60,10 +60,11 @@ class BenchmarkConfig:
     # DAG generation params
     dag_params: dict = field(default_factory=lambda: dict(
         n_start=20,
-        n_end=8,
+        n_end=10,
         max_mediators=3,
-        shared_mediator_prob=0.3,
+        shared_mediator_prob=0.4,
         confounder_prob=0.0,
+        end_node_alpha=0.8,
     ))
 
     # Simulation params
@@ -74,7 +75,7 @@ class BenchmarkConfig:
     n_noise_vars: int = 20
 
     # Seeds to run
-    seeds: list[int] = field(default_factory=lambda: list(range(10)))
+    seeds: list[int] = field(default_factory=lambda: list(range(30)))
 
     # Interventional benchmark
     run_interventional: bool = True
@@ -442,13 +443,14 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 
 _DAG_PARAMS = dict(
     n_start=20,
-    n_end=8,
+    n_end=10,
     max_mediators=3,
-    shared_mediator_prob=0.3,
+    shared_mediator_prob=0.4,
     confounder_prob=0.0,
+    end_node_alpha=0.8,
 )
 
-_SEEDS = list(range(20))
+_SEEDS = list(range(30))
 
 _N_LOW  =  50
 _N_MID  = 200

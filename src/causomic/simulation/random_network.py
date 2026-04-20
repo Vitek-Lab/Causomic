@@ -57,6 +57,8 @@ def generate_structured_dag(
     max_mediators: int = 3,
     confounder_prob: float = 0.1,
     shared_mediator_prob: float = 0.3,
+    hub_prob: float = 0.5,
+    end_node_alpha: float = 0.8,
     seed: Optional[int] = None,
 ) -> tuple:
     """
@@ -80,6 +82,16 @@ def generate_structured_dag(
         Probability of reusing an existing mediator node at each slot in a
         new chain (cross-talk). Falls back to a fresh node if reuse would
         create a cycle.
+    hub_prob : float
+        Probability that a start node routes all its end-node paths through a
+        single hub mediator (giving the start node out-degree 1). When not
+        selected, each path originates directly from the start node as before.
+    end_node_alpha : float
+        Dirichlet concentration parameter for end-node selection. Controls how
+        unevenly start-node paths are distributed across end nodes.
+        alpha=1.0 (default) → uniform selection (all end nodes equally likely).
+        alpha<1.0 → a few end nodes attract most paths; many receive very few.
+        alpha=0.3 produces a realistic skewed DILI-target distribution.
     seed : int or None
         Seed for numpy.random.default_rng. None gives non-deterministic output.
 
@@ -107,14 +119,31 @@ def generate_structured_dag(
     weights = p_geom * (1 - p_geom) ** (ks - 1)
     weights /= weights.sum()
 
+    # Per-network popularity distribution over end nodes (drawn once, shared across all
+    # start nodes so a network has a consistent set of "popular" DILI targets).
+    # alpha<1 gives a skewed Dirichlet: a few end nodes attract most paths.
+    end_weights = rng.dirichlet(np.ones(n_end) * end_node_alpha) if end_node_alpha != 1.0 else None
+
     for li in start_nodes:
         k = int(rng.choice(ks, p=weights))
-        target_ends = rng.choice(end_nodes, size=k, replace=False).tolist()
+        target_ends = rng.choice(end_nodes, size=k, replace=False, p=end_weights).tolist()
+
+        # Randomly route through a single hub (out-degree 1 for this start node)
+        # or let each path originate directly from the start node.
+        if rng.random() < hub_prob:
+            hub_name = f"M{med_count}"
+            med_count += 1
+            dag.add_node(hub_name)
+            dag.add_edge(li, hub_name)
+            mediator_pool.append(hub_name)
+            chain_origin = hub_name
+        else:
+            chain_origin = li
 
         for rj in target_ends:
             n_med = int(rng.integers(0, max_mediators + 1))
 
-            chain = [li]
+            chain = [chain_origin]
             new_meds_for_chain: list = []
 
             for _ in range(n_med):
@@ -146,7 +175,7 @@ def generate_structured_dag(
                 mediator_pool.extend(new_meds_for_chain)
             else:
                 # Fallback: all-new mediators — guaranteed acyclic
-                chain_fb = [li]
+                chain_fb = [chain_origin]
                 fb_meds: list = []
                 for _ in range(n_med):
                     nm = f"M{med_count}"
@@ -172,6 +201,19 @@ def generate_structured_dag(
         targets = rng.choice(observable_nodes, size=n_targets, replace=False).tolist()
         for t in targets:
             dag.add_edge(cname, t)
+
+    # Guarantee every end node has ≥1 in-edge and every start node has ≥1 out-edge.
+    # The Dirichlet end-node weights can assign near-zero probability to some end nodes
+    # so that no start-node path reaches them.  Fix by wiring a direct edge from a
+    # random start node — start→end is always cycle-free.
+    for enode in end_nodes:
+        if dag.in_degree(enode) == 0:
+            src = start_nodes[int(rng.integers(len(start_nodes)))]
+            dag.add_edge(src, enode)
+    for snode in start_nodes:
+        if dag.out_degree(snode) == 0:
+            dst = end_nodes[int(rng.integers(len(end_nodes)))]
+            dag.add_edge(snode, dst)
 
     assert nx.is_directed_acyclic_graph(dag), (
         "generate_structured_dag produced a cyclic graph — this is a bug."
@@ -273,6 +315,9 @@ def generate_indra_data(
     p_missing_real=0.0,
     p_on_path=0.7,
     p_mediated_shortcut=0.0,
+    preferential_attachment=False,
+    start_node_out_mu=2.0,
+    start_node_out_sigma=1.3,
 ):
     """
     Generate INDRA-compatible data from a ground truth DAG by introducing incorrect
@@ -295,12 +340,27 @@ def generate_indra_data(
         i.e. between two nodes u and v where (u, v) lies on such a path.
         The remaining fraction get a single outgoing edge to a random existing node
         (the previous behaviour). Default 0.7.
+    preferential_attachment : bool
+        If True, spurious edges are added with probability proportional to each
+        node's current total degree (Barabási–Albert preferential attachment),
+        producing a heavy-tailed hub structure that better matches real INDRA
+        networks.  If False (default), source and destination nodes are sampled
+        uniformly at random, preserving the original behaviour.
     p_mediated_shortcut : float
         Probability of adding a spurious direct edge from u to v for every pair
         (u, v) connected by a path of length >= 2 in the ground-truth DAG (i.e.
         through at least one mediator node).  Mimics the tendency of literature
         databases to report a direct association when only an indirect mechanism
         has been characterised.  Default 0.0 (disabled).
+    start_node_out_mu : float or None
+        If set, boosts start-node (source) out-degrees after all spurious edges
+        are added by sampling a target out-degree from lognormal(mu, sigma) and
+        adding preferential-attachment edges to non-start, non-end nodes.
+        Calibrated value for real INDRA networks: mu=2.0, sigma=1.3
+        (median ≈ 7, ~2 % of nodes exceed 100).  Default None (disabled).
+    start_node_out_sigma : float
+        Sigma for the lognormal target out-degree distribution used by the
+        start-node boost.  Only used when start_node_out_mu is not None.
 
     Returns
     -------
@@ -370,10 +430,23 @@ def generate_indra_data(
             modified_dag.add_edge(new_node, target_node)
             modified_dag.edges[new_node, target_node]["ground_truth"] = False
 
-    # Add incorrect edges between existing (ground-truth) nodes only
+    # Add incorrect edges between existing (ground-truth) nodes only.
+    # With preferential attachment, source selection is weighted by current
+    # out-degree and destination by in-degree (directed preferential attachment).
+    # This naturally creates broadcast hubs (high out, low in) and convergence
+    # hubs (high in, low out) matching the asymmetric degree distributions seen
+    # in real INDRA networks.
     for _ in range(num_incorrect_edges):
-        src = np.random.choice(existing_nodes)
-        dst = np.random.choice(existing_nodes)
+        if preferential_attachment:
+            out_deg = np.array([modified_dag.out_degree(n) for n in existing_nodes], dtype=float)
+            in_deg  = np.array([modified_dag.in_degree(n)  for n in existing_nodes], dtype=float)
+            out_deg += 1.0
+            in_deg  += 1.0
+            src = np.random.choice(existing_nodes, p=out_deg / out_deg.sum())
+            dst = np.random.choice(existing_nodes, p=in_deg  / in_deg.sum())
+        else:
+            src = np.random.choice(existing_nodes)
+            dst = np.random.choice(existing_nodes)
         if src != dst and not modified_dag.has_edge(src, dst):
             modified_dag.add_edge(src, dst)
             modified_dag.edges[src, dst]["ground_truth"] = False
@@ -397,16 +470,59 @@ def generate_indra_data(
                     modified_dag.add_edge(u, v)
                     modified_dag.edges[u, v]["ground_truth"] = False
 
+    # Boost start-node out-degrees to match real INDRA heavy-tailed distribution.
+    # Start nodes are GT sources (in-degree 0); end nodes are GT sinks (out-degree 0).
+    # Boost edges go only to mediator/spurious nodes to avoid inflating end-node in-degree.
+    if start_node_out_mu is not None and start_node_out_mu > 0:
+        gt_sources = {n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0}
+        gt_sinks   = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
+        boost_targets = [n for n in modified_dag.nodes()
+                         if n not in gt_sources and n not in gt_sinks]
+        for snode in gt_sources:
+            if snode not in modified_dag or not boost_targets:
+                continue
+            target_out = int(np.clip(
+                np.random.lognormal(start_node_out_mu, start_node_out_sigma), 1, 500))
+            n_add = target_out - modified_dag.out_degree(snode)
+            if n_add <= 0:
+                continue
+            candidates = [n for n in boost_targets if not modified_dag.has_edge(snode, n)]
+            if not candidates:
+                continue
+            in_degs = np.array([modified_dag.in_degree(n) + 1.0 for n in candidates])
+            chosen  = np.random.choice(
+                len(candidates), size=min(n_add, len(candidates)),
+                replace=False, p=in_degs / in_degs.sum())
+            for idx in chosen:
+                modified_dag.add_edge(snode, candidates[idx],
+                                      ground_truth=False)
+
+    # Guarantee every GT source has ≥1 out-edge and every GT sink has ≥1 in-edge.
+    # This can fail when p_missing_real drops all edges from a node.
+    gt_sources = {n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0}
+    gt_sinks   = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
+    non_sources = [n for n in modified_dag.nodes() if n not in gt_sources]
+    non_sinks   = [n for n in modified_dag.nodes() if n not in gt_sinks]
+    for snode in gt_sources:
+        if modified_dag.out_degree(snode) == 0 and non_sources:
+            target = np.random.choice(non_sources)
+            modified_dag.add_edge(snode, target, ground_truth=False)
+    for enode in gt_sinks:
+        if modified_dag.in_degree(enode) == 0 and non_sinks:
+            src = np.random.choice(non_sinks)
+            modified_dag.add_edge(src, enode, ground_truth=False)
+
     # Assign integer evidence counts drawn from log-normal distributions.
-    # True edges: lognormal(1.0, 1.5) → median ≈ 3, heavy tail up to 300.
-    # False edges: lognormal(0.0, 0.8) → median ≈ 1, mostly 1–5.
+    # True edges: lognormal(2.0, 1.5) → median ≈ 7, floor=3, heavy tail up to ~2000.
+    # False edges: lognormal(0.7, 0.8) → median ≈ 2, floor=1, mostly 1–10.
     for u, v in modified_dag.edges():
         is_true = modified_dag.edges[u, v].get("ground_truth", False)
         if is_true:
-            raw = np.random.lognormal(mean=1.0, sigma=1.5)
+            raw = np.random.lognormal(mean=2.0, sigma=1.5)
+            count = int(np.clip(np.round(raw), 3, 2000))
         else:
-            raw = np.random.lognormal(mean=0.0, sigma=0.8)
-        count = int(np.clip(np.round(raw), 1, 300))
+            raw = np.random.lognormal(mean=0.7, sigma=0.4)
+            count = int(np.clip(np.round(raw), 1, 2000))
         modified_dag.edges[u, v]["evidence_count"] = count
 
     edges_data = {
