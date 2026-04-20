@@ -1,19 +1,11 @@
 """
-Benchmarking script: pure data-driven causal discovery via Hill Climb (no INDRA prior).
+Head-to-head comparison: BICGaussIndraPriors vs. pure Hill Climb (BICGauss, no prior).
 
-Uses pgmpy's HillClimbSearch with BIC scoring to learn a graph entirely from
-observational data, with no biological prior knowledge.  This serves as a
-baseline to quantify how much the INDRA prior improves graph recovery and
-interventional prediction in benchmark_posterior_accuracy.py.
+Both methods receive identical data (same GT DAG, same simulation, same INDRA-derived
+spurious nodes as distractors) so results are directly comparable.
 
-Three sample-size configurations are evaluated (low / mid / high replicates),
-mirroring the sweep in benchmark_posterior_accuracy.py.  Uncorrelated noise
-variables are added to the feature matrix (same pattern as
-linear_comparison/benchmark_linear_comparison.py) to make structure learning
-non-trivial.
-
-After learning a graph, the learned structure is used to fit an LVM and
-evaluate interventional effect predictions against the ground-truth SEM.
+3 seeds × 2 methods × 200 samples.  Each trial is written to CSV immediately after
+completion so the file is always readable even if the run is interrupted.
 """
 
 from __future__ import annotations
@@ -33,9 +25,15 @@ from pgmpy.estimators import HillClimbSearch
 from pgmpy.estimators.StructureScore import BICGauss
 
 from causomic.causal_model.LVM import LVM
+from causomic.graph_construction.prior_data_reconciliation import (
+    BICGaussIndraPriors,
+    SparseHillClimb,
+)
 from causomic.graph_construction.repair import convert_to_y0_graph
+from causomic.network import estimate_posterior_dag
 from causomic.simulation.proteomics_simulator import simulate_data
 from causomic.simulation.random_network import (
+    generate_indra_data,
     generate_structured_dag,
     ground_truth_interventional_effect,
 )
@@ -54,8 +52,12 @@ class BenchmarkConfig:
     """Defines one benchmarking scenario.
 
     Each config is swept over `seeds` — one trial per seed.
+    `method` controls which graph-learning approach is used:
+      "hillclimb"  — pgmpy HillClimbSearch + BICGauss, no prior knowledge.
+      "bic_prior"  — estimate_posterior_dag with BICGaussIndraPriors.
     """
     name: str
+    method: str = "hillclimb"   # "hillclimb" | "bic_prior"
 
     # DAG generation params
     dag_params: dict = field(default_factory=lambda: dict(
@@ -67,15 +69,20 @@ class BenchmarkConfig:
         end_node_alpha=0.8,
     ))
 
+    # INDRA noise multipliers (relative to real graph size)
+    fake_node_multiplier: float = 2.0
+    fake_edge_multiplier: float = 5.0
+
     # Simulation params
     n_samples: int = 200
 
-    # Noise variables added to the HC input to make feature selection non-trivial.
-    # These are truly independent of the causal graph.
-    n_noise_vars: int = 20
+    # Prior-method params (ignored when method="hillclimb")
+    prior_strength: float = 5.0
+    n_bootstrap: int = 100
+    edge_probability: float = 0.5
 
     # Seeds to run
-    seeds: list[int] = field(default_factory=lambda: list(range(30)))
+    seeds: list[int] = field(default_factory=lambda: list(range(3)))
 
     # Interventional benchmark
     run_interventional: bool = True
@@ -222,43 +229,28 @@ def _run_interventional(
     sim: dict,
     roles: dict,
     gt_dag: nx.DiGraph,
-    hc_real_edges: set[tuple[str, str]],
-    protein_df: pd.DataFrame,
+    posterior,
+    real_protein_df: pd.DataFrame,
 ) -> tuple[dict[str, float], list[dict]]:
-    """Convert HC graph to y0 format, fit LVM, run paired interventions.
+    """Fit LVM on a pre-built posterior, run paired interventions, return metrics.
 
     Interventions are always do(start_nodes=1) vs do(start_nodes=0).
     The reported effect is E[outcome | do=1] - E[outcome | do=0].
 
     Parameters
     ----------
-    hc_real_edges : set of (str, str)
-        HC-learned edges restricted to real (non-noise) nodes.
-    protein_df : pd.DataFrame
-        Simulated protein data (real nodes only, no noise columns).
+    posterior : y0 NxMixedGraph
+        Already-built posterior graph (from either HC or estimate_posterior_dag).
+    real_protein_df : pd.DataFrame
+        Simulated protein data restricted to real nodes only.
     """
     outcome = roles["end"]
     intervention0 = {node: 1 for node in roles["start"]}
     intervention1 = {node: 0 for node in roles["start"]}
 
-    # Convert HC edges to y0 NxMixedGraph expected by LVM
-    if len(hc_real_edges) == 0:
-        # HC learned no edges among real nodes — cannot run LVM
-        nan_metrics = {
-            "int_rmse": float("nan"),
-            "int_mae": float("nan"),
-            "int_pearson_r": float("nan"),
-            "int_direction_accuracy": float("nan"),
-            "int_n_outcomes": float("nan"),
-        }
-        return nan_metrics, []
-
-    edges_df = pd.DataFrame(list(hc_real_edges), columns=["source", "target"])
-    posterior = convert_to_y0_graph(edges_df)
-
     pyro.clear_param_store()
     lvm = LVM(backend="pyro", num_steps=cfg.lvm_num_steps, verbose=False)
-    lvm.fit(protein_df, posterior)
+    lvm.fit(real_protein_df, posterior)
 
     torch.manual_seed(seed)
     lvm.intervention(intervention0, outcome, predictive_samples=cfg.lvm_predictive_samples)
@@ -293,16 +285,38 @@ def _run_interventional(
 # ---------------------------------------------------------------------------
 
 def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dict]]:
-    """Run one simulation + HC discovery trial and return (metrics_row, per_node_rows)."""
+    """Run one simulation trial for the configured method."""
 
     # 1. Ground-truth DAG
     gt_dag, roles = generate_structured_dag(**cfg.dag_params, seed=seed)
     start_nodes = roles["start"]
     end_nodes = roles["end"]
 
-    # 2. Simulate data
-    sim = simulate_data(
+    n_real_nodes = gt_dag.number_of_nodes()
+    n_real_edges = gt_dag.number_of_edges()
+    n_fake_nodes = max(1, round(n_real_nodes * cfg.fake_node_multiplier))
+    n_fake_edges = max(1, round(n_real_edges * cfg.fake_edge_multiplier))
+
+    # 2. INDRA pipeline — always run so both methods see the same spurious nodes.
+    #    HC ignores indra_df; bic_prior uses it as the prior.
+    indra_dag, indra_df, _missing = generate_indra_data(
         gt_dag,
+        num_incorrect_nodes=n_fake_nodes,
+        num_incorrect_edges=n_fake_edges,
+        p_missing_real=0.0,
+        p_mediated_shortcut=0.1,
+        preferential_attachment=True,
+    )
+    spurious_nodes = [n for n in indra_dag.nodes() if n not in gt_dag.nodes()]
+
+    # 3. Augment GT DAG with spurious isolated nodes (no edges added)
+    augmented_dag = gt_dag.copy()
+    for xn in spurious_nodes:
+        augmented_dag.add_node(xn)
+
+    # 4. Simulate data on augmented DAG — spurious columns act as distractors
+    sim = simulate_data(
+        augmented_dag,
         n=cfg.n_samples,
         add_feature_var=False,
         add_error=True,
@@ -310,55 +324,77 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
     )
     protein_df = pd.DataFrame(sim["Protein_data"])
 
-    # 3. Add uncorrelated noise variables to make structure learning non-trivial.
-    #    These are truly independent of the causal graph — HC must ignore them.
-    rng = np.random.default_rng(seed + 10_000)
-    noise_df = pd.DataFrame(
-        rng.normal(0, 1, size=(cfg.n_samples, cfg.n_noise_vars)),
-        columns=[f"NOISE{i}" for i in range(cfg.n_noise_vars)],
-    )
-    hc_input_df = pd.concat(
-        [protein_df.reset_index(drop=True), noise_df.reset_index(drop=True)],
-        axis=1,
-    )
+    # 5. Restrict to real nodes for metrics and LVM
+    real_nodes = set(str(n) for n in gt_dag.nodes())
+    real_protein_df = protein_df[[c for c in protein_df.columns if c in real_nodes]]
 
-    # 4. Learn graph from data alone using Hill Climb + BIC
-    hc_dag = HillClimbSearch(hc_input_df).estimate(
-        scoring_method=BICGauss(hc_input_df),
-        show_progress=True,
-        max_indegree=3,
-    )
+    # 6. Learn graph — method-specific
+    posterior = None
+    method_row: dict[str, Any] = {}
 
-    # 5. Extract edges restricted to real (non-noise) nodes for graph metrics and LVM
-    real_nodes = set(protein_df.columns)
-    hc_real_edges = {
-        (str(u), str(v))
-        for u, v in hc_dag.edges()
-        if u in real_nodes and v in real_nodes
-    }
+    if cfg.method == "hillclimb":
+        hc_dag = HillClimbSearch(protein_df).estimate(
+            scoring_method=BICGauss(protein_df),
+            show_progress=False,
+            max_indegree=3,
+        )
+        hc_real_edges = {
+            (str(u), str(v))
+            for u, v in hc_dag.edges()
+            if u in real_nodes and v in real_nodes
+        }
+        graph_metrics = compute_metrics(hc_real_edges, gt_dag, real_nodes)
+        method_row = {
+            "n_learned_edges_total": len(list(hc_dag.edges())),
+            "n_learned_edges_real": len(hc_real_edges),
+        }
+        if hc_real_edges:
+            edges_df = pd.DataFrame(list(hc_real_edges), columns=["source", "target"])
+            posterior = convert_to_y0_graph(edges_df)
 
-    # 6. Graph metrics — universe is all ordered real-node pairs (no noise)
-    graph_metrics = compute_metrics(hc_real_edges, gt_dag, real_nodes)
+    elif cfg.method == "bic_prior":
+        posterior, _ = estimate_posterior_dag(
+            protein_df,
+            indra_priors=indra_df,
+            prior_strength=cfg.prior_strength,
+            scoring_function=BICGaussIndraPriors,
+            search_algorithm=SparseHillClimb,
+            n_bootstrap=cfg.n_bootstrap,
+            edge_probability=cfg.edge_probability,
+            convert_to_probability=True,
+            return_bootstrap_dags=True,
+        )
+        pred_edges = {
+            (str(u), str(v))
+            for u, v in posterior.directed.edges()
+            if u in real_nodes and v in real_nodes
+        }
+        graph_metrics = compute_metrics(pred_edges, gt_dag, real_nodes)
+        method_row = {"n_learned_edges_real": len(pred_edges)}
 
+    else:
+        raise ValueError(f"Unknown method {cfg.method!r}")
+
+    # 7. Assemble row
     row: dict[str, Any] = {
         "config": cfg.name,
+        "method": cfg.method,
         "seed": seed,
-        "n_nodes": gt_dag.number_of_nodes(),
-        "n_edges": gt_dag.number_of_edges(),
+        "n_nodes": n_real_nodes,
+        "n_edges": n_real_edges,
         "n_start": len(start_nodes),
         "n_end": len(end_nodes),
-        "n_noise_vars": cfg.n_noise_vars,
-        "n_hc_edges_total": len(list(hc_dag.edges())),
-        "n_hc_edges_real": len(hc_real_edges),
+        "n_spurious_nodes": len(spurious_nodes),
+        **method_row,
         **graph_metrics,
     }
     per_node_rows: list[dict] = []
 
-    # 7. Interventional metrics (optional)
-    if cfg.run_interventional:
+    # 8. Interventional metrics (optional)
+    if cfg.run_interventional and posterior is not None:
         try:
             int_metrics, per_node_rows = _run_interventional(
-                cfg, seed, sim, roles, gt_dag, hc_real_edges, protein_df
+                cfg, seed, sim, roles, gt_dag, posterior, real_protein_df
             )
             row.update(int_metrics)
         except Exception as exc:
@@ -370,6 +406,14 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
                 "int_direction_accuracy": float("nan"),
                 "int_n_outcomes": float("nan"),
             })
+    elif cfg.run_interventional:
+        row.update({
+            "int_rmse": float("nan"),
+            "int_mae": float("nan"),
+            "int_pearson_r": float("nan"),
+            "int_direction_accuracy": float("nan"),
+            "int_n_outcomes": float("nan"),
+        })
 
     return row, per_node_rows
 
@@ -379,16 +423,15 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
 # ---------------------------------------------------------------------------
 
 def run_benchmark(
-    configs: list[BenchmarkConfig], verbose: bool = True
+    configs: list[BenchmarkConfig],
+    results_path: Path,
+    node_results_path: Path,
+    verbose: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Run all configs across all seeds.
+    """Run all configs across all seeds, writing each completed trial immediately.
 
-    Returns
-    -------
-    results : pd.DataFrame
-        One row per trial with graph + interventional summary metrics.
-    node_results : pd.DataFrame
-        Long-format per-node interventional results (empty if run_interventional=False).
+    Each row is appended to `results_path` (and `node_results_path` if non-empty)
+    as soon as it finishes, so results are recoverable if the run is interrupted.
     """
     rows: list[dict] = []
     all_per_node: list[dict] = []
@@ -399,11 +442,32 @@ def run_benchmark(
         for seed in cfg.seeds:
             done += 1
             if verbose:
-                print(f"[{done}/{total}] config={cfg.name!r}  seed={seed} ...", flush=True)
+                print(
+                    f"[{done}/{total}] config={cfg.name!r}  method={cfg.method!r}"
+                    f"  seed={seed} ...",
+                    flush=True,
+                )
             try:
                 row, per_node_rows = run_trial(cfg, seed)
                 rows.append(row)
                 all_per_node.extend(per_node_rows)
+
+                # Incremental save — append header only on first write
+                pd.DataFrame([row]).to_csv(
+                    results_path,
+                    mode="a",
+                    header=not results_path.exists() or results_path.stat().st_size == 0,
+                    index=False,
+                )
+                if per_node_rows:
+                    pd.DataFrame(per_node_rows).to_csv(
+                        node_results_path,
+                        mode="a",
+                        header=not node_results_path.exists()
+                              or node_results_path.stat().st_size == 0,
+                        index=False,
+                    )
+
                 if verbose:
                     msg = (
                         f"         precision={row['precision']:.3f}  "
@@ -452,30 +516,19 @@ _DAG_PARAMS = dict(
 
 _SEEDS = list(range(30))
 
-_N_LOW  =  50
-_N_MID  = 200
-_N_HIGH = 500
-
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
-        name="hillclimb_low_replicates",
+        name="bic_prior",
+        method="bic_prior",
         dag_params=_DAG_PARAMS,
-        n_samples=_N_LOW,
-        n_noise_vars=20,
+        n_samples=200,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
-        name="hillclimb_mid_replicates",
+        name="hillclimb",
+        method="hillclimb",
         dag_params=_DAG_PARAMS,
-        n_samples=_N_MID,
-        n_noise_vars=20,
-        seeds=_SEEDS,
-    ),
-    BenchmarkConfig(
-        name="hillclimb_high_replicates",
-        dag_params=_DAG_PARAMS,
-        n_samples=_N_HIGH,
-        n_noise_vars=20,
+        n_samples=200,
         seeds=_SEEDS,
     ),
 ]
@@ -486,23 +539,24 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    results, node_results = run_benchmark(BENCHMARK_CONFIGS, verbose=True)
+    results_path = OUTPUT_DIR / "baseline_benchmark_results.csv"
+    nodes_path = OUTPUT_DIR / "baseline_benchmark_interventional_nodes.csv"
 
-    print("\n" + "=" * 70)
-    print("PER-TRIAL RESULTS")
-    print("=" * 70)
-    print(results.to_string(index=False))
+    # Clear any previous run so incremental writes start fresh
+    results_path.unlink(missing_ok=True)
+    nodes_path.unlink(missing_ok=True)
+
+    results, node_results = run_benchmark(
+        BENCHMARK_CONFIGS,
+        results_path=results_path,
+        node_results_path=nodes_path,
+        verbose=True,
+    )
 
     print("\n" + "=" * 70)
     print("SUMMARY (mean ± std across seeds)")
     print("=" * 70)
     print(summarize(results).to_string())
-
-    results_path = OUTPUT_DIR / "benchmark_results.csv"
-    results.to_csv(results_path, index=False)
     print(f"\nTrial results saved to {results_path}")
-
     if not node_results.empty:
-        nodes_path = OUTPUT_DIR / "benchmark_interventional_nodes.csv"
-        node_results.to_csv(nodes_path, index=False)
         print(f"Per-node results saved to {nodes_path}")
