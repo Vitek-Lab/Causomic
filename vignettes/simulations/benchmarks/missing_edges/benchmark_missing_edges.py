@@ -422,7 +422,7 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
     metrics = graph_metrics + [m for m in int_metrics if m in results.columns]
     agg = (
         results.groupby("config")[metrics]
-        .agg(["mean", "std"], skipna=True)
+        .agg(["mean", "std"])
         .round(4)
     )
     agg.columns = ["_".join(c) for c in agg.columns]
@@ -442,7 +442,7 @@ _DAG_PARAMS = dict(
     end_node_alpha=0.8,
 )
 
-_SEEDS = list(range(30))
+_SEEDS = list(range(20))
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
