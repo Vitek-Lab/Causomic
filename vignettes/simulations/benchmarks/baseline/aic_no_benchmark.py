@@ -411,7 +411,7 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
     metrics = graph_metrics + [m for m in int_metrics if m in results.columns]
     agg = (
         results.groupby("config")[metrics]
-        .agg(["mean", "std"], skipna=True)
+        .agg(["mean", "std"])
         .round(4)
     )
     # Flatten multi-level columns
