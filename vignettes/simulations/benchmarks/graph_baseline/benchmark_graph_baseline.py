@@ -1,10 +1,10 @@
 """
-Head-to-head comparison: BICGaussIndraPriors vs. pure Hill Climb (BICGauss, no prior).
+Head-to-head comparison: BICGaussIndraPriors vs. GES and MMHC (no prior).
 
-Both methods receive identical data (same GT DAG, same simulation, same INDRA-derived
+All methods receive identical data (same GT DAG, same simulation, same INDRA-derived
 spurious nodes as distractors) so results are directly comparable.
 
-3 seeds × 2 methods × 200 samples.  Each trial is written to CSV immediately after
+3 seeds × 3 methods × 200 samples.  Each trial is written to CSV immediately after
 completion so the file is always readable even if the run is interrupted.
 """
 
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import pyro
 import torch
-from pgmpy.estimators import HillClimbSearch
+from pgmpy.estimators import GES, MmhcEstimator
 from pgmpy.estimators.StructureScore import BICGauss
 
 from causomic.causal_model.LVM import LVM
@@ -29,6 +29,10 @@ from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     SparseHillClimb,
 )
+
+from dagma.linear import DagmaLinear
+
+
 from causomic.graph_construction.repair import convert_to_y0_graph
 from causomic.network import estimate_posterior_dag
 from causomic.simulation.proteomics_simulator import simulate_data
@@ -53,11 +57,12 @@ class BenchmarkConfig:
 
     Each config is swept over `seeds` — one trial per seed.
     `method` controls which graph-learning approach is used:
-      "hillclimb"  — pgmpy HillClimbSearch + BICGauss, no prior knowledge.
+      "ges"        — pgmpy GES (Greedy Equivalence Search), no prior knowledge.
+      "mmhc"       — pgmpy MmhcEstimator (Max-Min Hill Climbing) + BICGauss, no prior.
       "bic_prior"  — estimate_posterior_dag with BICGaussIndraPriors.
     """
     name: str
-    method: str = "hillclimb"   # "hillclimb" | "bic_prior"
+    method: str = "ges"   # "ges" | "mmhc" | "bic_prior"
 
     # DAG generation params
     dag_params: dict = field(default_factory=lambda: dict(
@@ -76,7 +81,7 @@ class BenchmarkConfig:
     # Simulation params
     n_samples: int = 200
 
-    # Prior-method params (ignored when method="hillclimb")
+    # Prior-method params (ignored when method="ges" or "mmhc")
     prior_strength: float = 5.0
     n_bootstrap: int = 100
     edge_probability: float = 0.5
@@ -332,24 +337,57 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
     posterior = None
     method_row: dict[str, Any] = {}
 
-    if cfg.method == "hillclimb":
-        hc_dag = HillClimbSearch(protein_df).estimate(
-            scoring_method=BICGauss(protein_df),
-            show_progress=False,
-            max_indegree=3,
-        )
-        hc_real_edges = {
+
+    if cfg.method == "dagma":
+        X = protein_df.values
+        node_names = list(protein_df.columns)
+
+        model = DagmaLinear(loss_type="l2")
+        W_est = model.fit(X, lambda1=0.02)
+
+        THRESHOLD = 0.3
+        W_est[np.abs(W_est) < THRESHOLD] = 0
+
+        learned_dag = nx.DiGraph()
+        learned_dag.add_nodes_from(node_names)
+        d = len(node_names)
+        for i in range(d):
+            for j in range(d):
+                if W_est[i, j] != 0:
+                    learned_dag.add_edge(node_names[i], node_names[j])
+
+        real_nodes = set(str(n) for n in gt_dag.nodes())
+
+        learned_real_edges = {
             (str(u), str(v))
-            for u, v in hc_dag.edges()
-            if u in real_nodes and v in real_nodes
+            for u, v in learned_dag.edges()
+            if str(u) in real_nodes and str(v) in real_nodes
         }
-        graph_metrics = compute_metrics(hc_real_edges, gt_dag, real_nodes)
+        graph_metrics = compute_metrics(learned_real_edges, gt_dag, real_nodes)
         method_row = {
-            "n_learned_edges_total": len(list(hc_dag.edges())),
-            "n_learned_edges_real": len(hc_real_edges),
+            "n_learned_edges_total": len(list(learned_dag.edges())),
+            "n_learned_edges_real": len(learned_real_edges),
         }
-        if hc_real_edges:
-            edges_df = pd.DataFrame(list(hc_real_edges), columns=["source", "target"])
+        if learned_real_edges:
+            edges_df = pd.DataFrame(list(learned_real_edges), columns=["source", "target"])
+            posterior = convert_to_y0_graph(edges_df)
+
+    elif cfg.method == "mmhc":
+        learned_dag = MmhcEstimator(protein_df).estimate(
+            scoring_method=BICGauss(protein_df),
+        )
+        learned_real_edges = {
+            (str(u), str(v))
+            for u, v in learned_dag.edges()
+            if str(u) in real_nodes and str(v) in real_nodes
+        }
+        graph_metrics = compute_metrics(learned_real_edges, gt_dag, real_nodes)
+        method_row = {
+            "n_learned_edges_total": len(list(learned_dag.edges())),
+            "n_learned_edges_real": len(learned_real_edges),
+        }
+        if learned_real_edges:
+            edges_df = pd.DataFrame(list(learned_real_edges), columns=["source", "target"])
             posterior = convert_to_y0_graph(edges_df)
 
     elif cfg.method == "bic_prior":
@@ -367,7 +405,7 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
         pred_edges = {
             (str(u), str(v))
             for u, v in posterior.directed.edges()
-            if u in real_nodes and v in real_nodes
+            if str(u) in real_nodes and str(v) in real_nodes
         }
         graph_metrics = compute_metrics(pred_edges, gt_dag, real_nodes)
         method_row = {"n_learned_edges_real": len(pred_edges)}
@@ -514,19 +552,12 @@ _DAG_PARAMS = dict(
     end_node_alpha=0.8,
 )
 
-_SEEDS = list(range(30))
+_SEEDS = list(range(1))
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
     BenchmarkConfig(
-        name="bic_prior",
-        method="bic_prior",
-        dag_params=_DAG_PARAMS,
-        n_samples=200,
-        seeds=_SEEDS,
-    ),
-    BenchmarkConfig(
-        name="hillclimb",
-        method="hillclimb",
+        name="dagma",
+        method="dagma",
         dag_params=_DAG_PARAMS,
         n_samples=200,
         seeds=_SEEDS,
