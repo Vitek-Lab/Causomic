@@ -49,9 +49,9 @@ Example
 >>>
 >>> graph, roles = generate_cyclic_graph(
 ...     n_start=5, n_end=3,
-...     add_cycle_in_start=False,
-...     add_cycle_in_mediators=True,
-...     add_cycle_in_end=True,
+...     add_cycle_in_start=0,
+...     add_cycle_in_mediators=2,
+...     add_cycle_in_end=2,
 ...     cycle_size=3,
 ...     seed=42,
 ... )
@@ -70,6 +70,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import networkx as nx
 import numpy as np
 import pandas as pd
+import numpy.linalg as _npl
 
 from causomic.simulation.random_network import generate_structured_dag
 from causomic.simulation.proteomics_simulator import (
@@ -84,10 +85,11 @@ def generate_cyclic_graph(
     n_start: int = 3,
     n_end: int = 3,
     max_mediators: int = 3,
-    add_cycle_in_start: bool = False,
-    add_cycle_in_mediators: bool = False,
-    add_cycle_in_end: bool = False,
+    add_cycle_in_start: int = 0,
+    add_cycle_in_mediators: int = 0,
+    add_cycle_in_end: int = 0,
     cycle_size: int = 2,
+    mediator_cycle_prob: float = 0.5,
     confounder_prob: float = 0.0,
     shared_mediator_prob: float = 0.3,
     seed: Optional[int] = None,
@@ -97,7 +99,7 @@ def generate_cyclic_graph(
 
     Builds a structured base DAG via :func:`generate_structured_dag`, then injects
     directed cycles at the requested locations.  At least one of the three
-    ``add_cycle_in_*`` flags must be ``True``.
+    ``add_cycle_in_*`` parameters must be non-zero.
 
     Parameters
     ----------
@@ -107,24 +109,34 @@ def generate_cyclic_graph(
         Number of end (readout) nodes in the base DAG.  Named R0, R1, …
     max_mediators : int
         Maximum mediator nodes per start-to-end path in the base DAG.
-    add_cycle_in_start : bool
-        If ``True``, create a cycle anchored at L0 that routes through
-        ``cycle_size - 1`` fresh mediator nodes (CYS0, CYS1, …).
-        The anchor L0 keeps all its existing outgoing edges.
-        Requires ``cycle_size >= 2``.
-    add_cycle_in_mediators : bool
-        If ``True``, create a pure-mediator cycle with ``cycle_size`` fresh
-        nodes (CYM0, CYM1, …, CYM0).  The cycle is attached to the main graph
-        via one in-edge from a random upstream node and one out-edge to a random
-        downstream node.
-    add_cycle_in_end : bool
-        If ``True``, create a cycle anchored at R0 that routes through
-        ``cycle_size - 1`` fresh mediator nodes (CYE0, CYE1, …).
-        The anchor R0 keeps all its existing incoming edges.
-        Requires ``cycle_size >= 2``.
+    add_cycle_in_start : int
+        Number of cycles to inject at start nodes.  Cycle *k* is anchored at
+        ``L{k}``.  A fraction ``mediator_cycle_prob`` of cycles route through a
+        randomly chosen existing mediator node as the first bridge; the
+        remainder use all-fresh nodes named ``CYS{k}_{i}``.  The anchor keeps
+        all its existing outgoing edges.  Requires
+        ``n_start >= add_cycle_in_start``.  ``True`` is treated as 1.
+    add_cycle_in_mediators : int
+        Number of independent pure-mediator cycles to inject.  Cycle *k*
+        consists of ``cycle_size`` fresh nodes ``CYM{k}_{i}`` forming a loop,
+        attached to the main graph via one in-edge from a random upstream node
+        and one out-edge to a random downstream node.  ``True`` is treated as 1.
+    add_cycle_in_end : int
+        Number of cycles to inject at end nodes.  Cycle *k* is anchored at
+        ``R{k}``.  A fraction ``mediator_cycle_prob`` of cycles route through a
+        randomly chosen existing mediator node as the last bridge (so
+        ``M → R{k}`` closes the loop); the remainder use all-fresh nodes named
+        ``CYE{k}_{i}``.  The anchor keeps all its existing incoming edges.
+        Requires ``n_end >= add_cycle_in_end``.  ``True`` is treated as 1.
     cycle_size : int
-        Total number of nodes in each cycle (must be ≥ 2).  For start/end
-        cycles, one of those nodes is the anchor; the rest are fresh mediators.
+        Total number of nodes in each individual cycle (must be ≥ 2).  For
+        start/end cycles, one of those nodes is the existing anchor; the rest
+        are fresh mediators.
+    mediator_cycle_prob : float
+        Fraction of start/end cycles that route through an existing mediator
+        node instead of using all-fresh bridge nodes.  Must be in [0, 1].
+        Default 0.5 means half of the cycles involve existing mediators.
+        Has no effect on pure mediator cycles (``add_cycle_in_mediators``).
     confounder_prob : float
         Fraction of observable nodes in the base DAG to add as confounders.
     shared_mediator_prob : float
@@ -137,31 +149,40 @@ def generate_cyclic_graph(
     -------
     graph : nx.DiGraph
         Causal graph with injected cycles.  Guaranteed to be non-acyclic when
-        at least one cycle flag is enabled.
+        at least one cycle is enabled.
     node_roles : dict
         Keys ``'start'``, ``'end'``, ``'mediators'``, ``'confounders'`` carry
         the same node lists as ``generate_structured_dag``.  An additional key
         ``'cycle_nodes'`` holds a sub-dict keyed by enabled location
-        (``'start'``, ``'mediators'``, ``'end'``), each mapping to the list of
-        nodes in that cycle (anchor first for start/end cycles).
+        (``'start'``, ``'mediators'``, ``'end'``), each mapping to a **flat**
+        list of all nodes that participate in cycles at that location (anchors
+        and fresh mediators from every injected cycle, in injection order).
 
     Raises
     ------
     ValueError
-        If no cycle location is enabled, ``cycle_size < 2``, or the base DAG
-        has too few nodes of the requested type for a start/end cycle.
+        If no cycle location is enabled, ``cycle_size < 2``, or ``n_start`` /
+        ``n_end`` is too small to anchor the requested number of cycles.
     """
-    if not (add_cycle_in_start or add_cycle_in_mediators or add_cycle_in_end):
+    n_start_cycles = int(add_cycle_in_start)
+    n_med_cycles = int(add_cycle_in_mediators)
+    n_end_cycles = int(add_cycle_in_end)
+
+    if not (n_start_cycles or n_med_cycles or n_end_cycles):
         raise ValueError(
             "At least one of add_cycle_in_start, add_cycle_in_mediators, "
-            "or add_cycle_in_end must be True."
+            "or add_cycle_in_end must be non-zero."
         )
     if cycle_size < 2:
         raise ValueError(f"cycle_size must be >= 2, got {cycle_size}.")
-    if add_cycle_in_start and n_start < 1:
-        raise ValueError("add_cycle_in_start requires n_start >= 1.")
-    if add_cycle_in_end and n_end < 1:
-        raise ValueError("add_cycle_in_end requires n_end >= 1.")
+    if n_start_cycles > n_start:
+        raise ValueError(
+            f"add_cycle_in_start={n_start_cycles} requires n_start >= {n_start_cycles}."
+        )
+    if n_end_cycles > n_end:
+        raise ValueError(
+            f"add_cycle_in_end={n_end_cycles} requires n_end >= {n_end_cycles}."
+        )
 
     if seed is not None:
         np.random.seed(seed)
@@ -179,57 +200,106 @@ def generate_cyclic_graph(
     rng = np.random.default_rng(seed)
 
     # ------------------------------------------------------------------
-    # Start-node cycle: L0 → CYS0 → CYS1 → … → L0
+    # Start-node cycles: L{k} → … → L{k}
+    # First ceil(n/2) cycles route through an existing mediator node;
+    # remaining cycles use all-fresh bridge nodes.
     # ------------------------------------------------------------------
-    if add_cycle_in_start:
-        anchor = node_roles["start"][0]
-        cy_mediators = [f"CYS{i}" for i in range(cycle_size - 1)]
-        chain = [anchor] + cy_mediators + [anchor]
+    if n_start_cycles:
+        all_cy_nodes: List[str] = []
+        med_pool = node_roles["mediators"]
+        n_med_routed = round(n_start_cycles * mediator_cycle_prob)
 
-        graph.add_nodes_from(cy_mediators)
-        for u, v in zip(chain[:-1], chain[1:]):
-            graph.add_edge(u, v)
+        for k in range(n_start_cycles):
+            anchor = node_roles["start"][k]
+            use_existing_med = k < n_med_routed and len(med_pool) > 0
 
-        node_roles["cycle_nodes"]["start"] = [anchor] + cy_mediators
+            if use_existing_med:
+                med = med_pool[int(rng.integers(len(med_pool)))]
+                if cycle_size == 2:
+                    graph.add_edge(anchor, med)
+                    graph.add_edge(med, anchor)
+                    cycle_node_list = [anchor, med]
+                else:
+                    fresh = [f"CYS{k}_{i}" for i in range(cycle_size - 2)]
+                    graph.add_nodes_from(fresh)
+                    chain = [anchor, med] + fresh + [anchor]
+                    for u, v in zip(chain[:-1], chain[1:]):
+                        graph.add_edge(u, v)
+                    cycle_node_list = [anchor, med] + fresh
+            else:
+                cy_mediators = [f"CYS{k}_{i}" for i in range(cycle_size - 1)]
+                chain = [anchor] + cy_mediators + [anchor]
+                graph.add_nodes_from(cy_mediators)
+                for u, v in zip(chain[:-1], chain[1:]):
+                    graph.add_edge(u, v)
+                cycle_node_list = [anchor] + cy_mediators
 
-    # ------------------------------------------------------------------
-    # Mediator cycle: CYM0 → CYM1 → … → CYM0, attached to main path
-    # ------------------------------------------------------------------
-    if add_cycle_in_mediators:
-        cy_nodes = [f"CYM{i}" for i in range(cycle_size)]
-        chain = cy_nodes + [cy_nodes[0]]
-
-        graph.add_nodes_from(cy_nodes)
-        for u, v in zip(chain[:-1], chain[1:]):
-            graph.add_edge(u, v)
-
-        # Attach entry: random start or base-mediator node → CYM0
-        upstream = node_roles["start"] + node_roles["mediators"]
-        if upstream:
-            src = upstream[int(rng.integers(len(upstream)))]
-            graph.add_edge(src, cy_nodes[0])
-
-        # Attach exit: CYM{last} → random base-mediator or end node
-        downstream = node_roles["mediators"] + node_roles["end"]
-        if downstream:
-            dst = downstream[int(rng.integers(len(downstream)))]
-            graph.add_edge(cy_nodes[-1], dst)
-
-        node_roles["cycle_nodes"]["mediators"] = cy_nodes
+            all_cy_nodes.extend(cycle_node_list)
+        node_roles["cycle_nodes"]["start"] = all_cy_nodes
 
     # ------------------------------------------------------------------
-    # End-node cycle: R0 → CYE0 → CYE1 → … → R0
+    # Mediator cycles: CYM{k}_0 → … → CYM{k}_0, attached to main path
     # ------------------------------------------------------------------
-    if add_cycle_in_end:
-        anchor = node_roles["end"][0]
-        cy_mediators = [f"CYE{i}" for i in range(cycle_size - 1)]
-        chain = [anchor] + cy_mediators + [anchor]
+    if n_med_cycles:
+        all_cy_nodes = []
+        for k in range(n_med_cycles):
+            cy_nodes = [f"CYM{k}_{i}" for i in range(cycle_size)]
+            chain = cy_nodes + [cy_nodes[0]]
+            graph.add_nodes_from(cy_nodes)
+            for u, v in zip(chain[:-1], chain[1:]):
+                graph.add_edge(u, v)
 
-        graph.add_nodes_from(cy_mediators)
-        for u, v in zip(chain[:-1], chain[1:]):
-            graph.add_edge(u, v)
+            upstream = node_roles["start"] + node_roles["mediators"]
+            if upstream:
+                src = upstream[int(rng.integers(len(upstream)))]
+                graph.add_edge(src, cy_nodes[0])
 
-        node_roles["cycle_nodes"]["end"] = [anchor] + cy_mediators
+            downstream = node_roles["mediators"] + node_roles["end"]
+            if downstream:
+                dst = downstream[int(rng.integers(len(downstream)))]
+                graph.add_edge(cy_nodes[-1], dst)
+
+            all_cy_nodes.extend(cy_nodes)
+        node_roles["cycle_nodes"]["mediators"] = all_cy_nodes
+
+    # ------------------------------------------------------------------
+    # End-node cycles: R{k} → … → R{k}
+    # First ceil(n/2) cycles route through an existing mediator node
+    # (placed last in the chain so M → R{k} closes the loop);
+    # remaining cycles use all-fresh bridge nodes.
+    # ------------------------------------------------------------------
+    if n_end_cycles:
+        all_cy_nodes = []
+        med_pool = node_roles["mediators"]
+        n_med_routed = round(n_end_cycles * mediator_cycle_prob)
+
+        for k in range(n_end_cycles):
+            anchor = node_roles["end"][k]
+            use_existing_med = k < n_med_routed and len(med_pool) > 0
+
+            if use_existing_med:
+                med = med_pool[int(rng.integers(len(med_pool)))]
+                if cycle_size == 2:
+                    graph.add_edge(anchor, med)
+                    graph.add_edge(med, anchor)
+                    cycle_node_list = [anchor, med]
+                else:
+                    fresh = [f"CYE{k}_{i}" for i in range(cycle_size - 2)]
+                    graph.add_nodes_from(fresh)
+                    chain = [anchor] + fresh + [med, anchor]
+                    for u, v in zip(chain[:-1], chain[1:]):
+                        graph.add_edge(u, v)
+                    cycle_node_list = [anchor] + fresh + [med]
+            else:
+                cy_mediators = [f"CYE{k}_{i}" for i in range(cycle_size - 1)]
+                chain = [anchor] + cy_mediators + [anchor]
+                graph.add_nodes_from(cy_mediators)
+                for u, v in zip(chain[:-1], chain[1:]):
+                    graph.add_edge(u, v)
+                cycle_node_list = [anchor] + cy_mediators
+
+            all_cy_nodes.extend(cycle_node_list)
+        node_roles["cycle_nodes"]["end"] = all_cy_nodes
 
     assert not nx.is_directed_acyclic_graph(graph), (
         "generate_cyclic_graph produced a DAG — cycle injection failed. "
@@ -463,3 +533,128 @@ def simulate_cyclic_data(
         "Feature_data": feature_level_data,
         "Coefficients": coefficients,
     }
+
+def ground_truth_interventional_effect_cyclic(
+    graph: nx.DiGraph,
+    coefficients: dict,
+    intervention_nodes: dict,
+    output_nodes: list,
+) -> dict:
+    """
+    Compute the ground-truth expected interventional effect for a graph that
+    may contain directed cycles.
+
+    Mirrors :func:`~causomic.simulation.random_network.ground_truth_interventional_effect`
+    but handles cycles via two mechanisms:
+
+    1. **Do-operator edge cutting**: a copy of the graph has every incoming edge
+       to each intervened node removed.  This often breaks cycles that include
+       intervened nodes, reducing those SCCs to singletons in the modified graph.
+
+    2. **Linear system for remaining cycles**: if a multi-node SCC survives in
+       the modified graph (a cycle whose members are all non-intervened but that
+       receives a changed signal from upstream), the steady-state deviations
+       satisfy ``Δ = A Δ + b``, i.e. ``(I - A) Δ = b``, which is solved exactly.
+       The system has a unique solution when the spectral radius of ``A`` is < 1
+       (guaranteed when all cycle-edge coefficients are in the [-0.75, 0.75]
+       range used by :func:`~causomic.simulation.proteomics_simulator.generate_coefficients`).
+
+    Parameters
+    ----------
+    graph : nx.DiGraph
+        Causal graph, typically from :func:`generate_cyclic_graph`.
+        May contain directed cycles.
+    coefficients : dict
+        SEM coefficients as returned in the ``'Coefficients'`` key of
+        :func:`simulate_cyclic_data`.
+        Format: ``{node: {parent: coef, 'intercept': val, 'error': var}}``.
+    intervention_nodes : dict
+        Mapping of node name → interventional value, e.g. ``{'L0': 30.0}``.
+    output_nodes : list
+        Names of the nodes whose post-intervention expected values are of
+        interest, e.g. ``['R0', 'R1']``.
+
+    Returns
+    -------
+    dict
+        Keys:
+        - ``'baseline'``: ``{node: E[node]}`` under observation (= intercept).
+        - ``'interventional'``: ``{node: E[node | do(...)]}`` for every node.
+        - ``'effect'``: ``{node: E[node | do(...)] - E[node]}`` for each output node.
+
+    Raises
+    ------
+    numpy.linalg.LinAlgError
+        If the linear system for a cycle SCC is singular (spectral radius ≥ 1).
+    """
+    _non_coef = {"intercept", "error", "cell_type"}
+
+    # Observational baseline: every node's expected value equals its intercept
+    # because simulate_node mean-centers parent values.
+    baseline = {node: coefficients[node]["intercept"] for node in graph.nodes()
+                if node in coefficients}
+
+    # Apply do-operator: cut all incoming edges to intervened nodes.
+    modified = graph.copy()
+    for node in intervention_nodes:
+        for pred in list(modified.predecessors(node)):
+            modified.remove_edge(pred, node)
+
+    # Re-condense the modified graph. Cutting edges may break cycles that
+    # contained intervened nodes, so their SCCs collapse to singletons.
+    condensation = nx.condensation(modified)
+
+    delta: dict = {}  # deviation from baseline under the intervention
+
+    for scc_idx in nx.topological_sort(condensation):
+        members: set = condensation.nodes[scc_idx]["members"]
+
+        if len(members) == 1:
+            node = next(iter(members))
+            if node not in coefficients:
+                continue
+            if node in intervention_nodes:
+                delta[node] = intervention_nodes[node] - baseline[node]
+            else:
+                coefs = coefficients[node]
+                parents = [k for k in coefs if k not in _non_coef]
+                node_delta = 0.0
+                for parent in parents:
+                    if modified.has_edge(parent, node) and parent in delta:
+                        node_delta += coefs[parent] * delta[parent]
+                delta[node] = node_delta
+
+        else:
+            # Multi-node SCC: none of these nodes are intervened (intervention
+            # edges were cut above, so intervened nodes can't form cycles here).
+            # Solve (I - A) * delta_vec = b.
+            member_list = list(members)
+            idx = {n: i for i, n in enumerate(member_list)}
+            m = len(member_list)
+
+            A = np.zeros((m, m))
+            b = np.zeros(m)
+
+            for node in member_list:
+                if node not in coefficients:
+                    continue
+                i = idx[node]
+                coefs = coefficients[node]
+                parents = [k for k in coefs if k not in _non_coef]
+                for parent in parents:
+                    if not modified.has_edge(parent, node):
+                        continue
+                    if parent in members:
+                        A[i, idx[parent]] = coefs[parent]
+                    elif parent in delta:
+                        b[i] += coefs[parent] * delta[parent]
+
+            delta_vec = _npl.solve(np.eye(m) - A, b)
+            for node in member_list:
+                delta[node] = delta_vec[idx[node]]
+
+    interventional = {node: baseline[node] + delta.get(node, 0.0)
+                      for node in graph.nodes() if node in baseline}
+    effect = {node: interventional[node] - baseline[node] for node in output_nodes}
+
+    return {"baseline": baseline, "interventional": interventional, "effect": effect}
