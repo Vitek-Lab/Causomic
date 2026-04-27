@@ -7,8 +7,9 @@ For each trial the benchmark reports standard graph-structure metrics (precision
 recall, F1, accuracy) plus cycle-specific metrics (cycle_edge_recall,
 cycle_edge_precision) that isolate how well the method recovers the feedback edges.
 
-Interventional metrics are disabled for cyclic configs because ground-truth
-expected values cannot be computed analytically via topological sort.
+Interventional metrics use ``ground_truth_interventional_effect_cyclic`` for
+cyclic configs, which solves the steady-state linear system for remaining SCCs
+after applying the do-operator edge cuts.
 
 Configurations
 --------------
@@ -48,7 +49,11 @@ from causomic.graph_construction.prior_data_reconciliation import (
     SparseHillClimb,
 )
 from causomic.network import estimate_posterior_dag
-from causomic.simulation.cyclic_network import generate_cyclic_graph, simulate_cyclic_data
+from causomic.simulation.cyclic_network import (
+    generate_cyclic_graph,
+    ground_truth_interventional_effect_cyclic,
+    simulate_cyclic_data,
+)
 from causomic.simulation.proteomics_simulator import simulate_data
 from causomic.simulation.random_network import (
     generate_indra_data,
@@ -101,7 +106,7 @@ class BenchmarkConfig:
 
     # Enable interventional metrics only for the non-cyclic baseline
     # (ground_truth_interventional_effect requires topological order)
-    run_interventional: bool = False
+    run_interventional: bool = True
     lvm_num_steps: int = 1000
     lvm_predictive_samples: int = 200
 
@@ -245,6 +250,7 @@ def _run_interventional(
     roles: dict,
     gt_dag: nx.DiGraph,
     posterior,
+    is_cyclic: bool = False,
 ) -> tuple[dict[str, float], list[dict]]:
     model_input  = pd.DataFrame(sim["Protein_data"])
     outcome      = roles["end"]
@@ -267,10 +273,10 @@ def _run_interventional(
 
     ci_results = (int0 - int1).mean(axis=0)
 
-    gt_int0 = ground_truth_interventional_effect(
-        gt_dag, sim["Coefficients"], intervention0, outcome)
-    gt_int1 = ground_truth_interventional_effect(
-        gt_dag, sim["Coefficients"], intervention1, outcome)
+    gt_fn = (ground_truth_interventional_effect_cyclic if is_cyclic
+             else ground_truth_interventional_effect)
+    gt_int0 = gt_fn(gt_dag, sim["Coefficients"], intervention0, outcome)
+    gt_int1 = gt_fn(gt_dag, sim["Coefficients"], intervention1, outcome)
     gt_results = {k: gt_int0["effect"][k] - gt_int1["effect"][k]
                   for k in gt_int1["effect"]}
 
@@ -399,11 +405,11 @@ def run_trial(cfg: BenchmarkConfig, seed: int) -> tuple[dict[str, Any], list[dic
     }
     per_node_rows: list[dict] = []
 
-    # 9. Interventional metrics (baseline only — requires DAG topological order)
+    # 9. Interventional metrics
     if cfg.run_interventional:
         try:
             int_metrics, per_node_rows = _run_interventional(
-                cfg, seed, sim, roles, gt_dag, posterior
+                cfg, seed, sim, roles, gt_dag, posterior, is_cyclic=is_cyclic
             )
             row.update(int_metrics)
         except Exception as exc:
@@ -487,14 +493,14 @@ def summarize(results: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _DAG_PARAMS_BASE = dict(
-    n_start=20,
-    n_end=8,
+    n_start=5,
+    n_end=3,
     max_mediators=3,
-    shared_mediator_prob=0.3,
+    shared_mediator_prob=0.6,
     confounder_prob=0.0,
 )
 
-_SEEDS = list(range(10))
+_SEEDS = list(range(5))
 
 BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
@@ -503,10 +509,9 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
         name="no_cycle",
         dag_params=_DAG_PARAMS_BASE,
         cycle_params={},                   # empty → uses standard DAG pipeline
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=3.0,
-        seeds=_SEEDS,
-        run_interventional=False,          # set True to compare interventional effects
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
+        seeds=_SEEDS,    
     ),
 
     # ── Cycle anchored at a start node ───────────────────────────────────
@@ -515,13 +520,15 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
         name="cycle_start",
         dag_params=_DAG_PARAMS_BASE,
         cycle_params=dict(
-            add_cycle_in_start=True,
+            add_cycle_in_start=5,
+            add_cycle_in_mediators=0,
+            add_cycle_in_end=0,
+            mediator_cycle_prob=0.5,
             cycle_size=3,
         ),
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=3.0,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         seeds=_SEEDS,
-        run_interventional=False,
     ),
 
     # ── Pure mediator cycle ───────────────────────────────────────────────
@@ -530,13 +537,15 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
         name="cycle_mediators",
         dag_params=_DAG_PARAMS_BASE,
         cycle_params=dict(
-            add_cycle_in_mediators=True,
+            add_cycle_in_start=0,
+            add_cycle_in_mediators=5,
+            add_cycle_in_end=0,
+            mediator_cycle_prob=0.5,
             cycle_size=3,
         ),
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=3.0,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         seeds=_SEEDS,
-        run_interventional=False,
     ),
 
     # ── Cycle anchored at an end node ────────────────────────────────────
@@ -545,13 +554,30 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
         name="cycle_end",
         dag_params=_DAG_PARAMS_BASE,
         cycle_params=dict(
-            add_cycle_in_end=True,
+            add_cycle_in_start=0,
+            add_cycle_in_mediators=0,
+            add_cycle_in_end=3,
+            mediator_cycle_prob=0.5,
             cycle_size=3,
         ),
-        fake_node_multiplier=1.0,
-        fake_edge_multiplier=3.0,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
         seeds=_SEEDS,
-        run_interventional=False,
+    ),
+
+    BenchmarkConfig(
+        name="cycle_all",
+        dag_params=_DAG_PARAMS_BASE,
+        cycle_params=dict(
+            add_cycle_in_start=5,
+            add_cycle_in_mediators=5,
+            add_cycle_in_end=3,
+            mediator_cycle_prob=0.5,
+            cycle_size=3,
+        ),
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=5.0,
+        seeds=_SEEDS,
     ),
 ]
 
