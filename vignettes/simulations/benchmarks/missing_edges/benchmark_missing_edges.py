@@ -448,43 +448,53 @@ BENCHMARK_CONFIGS: list[BenchmarkConfig] = [
 
     # ── Sweep 1: missing real edges only ────────────────────────────────────
     BenchmarkConfig(
-        name="missing_20pct",
+        name="mult1",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=2.0,
-        fake_edge_multiplier=5.0,
-        p_missing_real=0.2,
+        fake_edge_multiplier=1.0,
+        p_missing_real=0.0,
         p_mediated_shortcut=0.0,
         seeds=_SEEDS,
     ),
-    BenchmarkConfig(
-        name="missing_50pct",
+        BenchmarkConfig(
+        name="mult2",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=2.0,
-        fake_edge_multiplier=5.0,
-        p_missing_real=0.5,
+        fake_edge_multiplier=2.0,
+        p_missing_real=0.0,
         p_mediated_shortcut=0.0,
         seeds=_SEEDS,
     ),
 
-    # ── Sweep 2: missing edges + mediated shortcuts (p_shortcut=0.3) ────────
     BenchmarkConfig(
-        name="missing_20pct_shortcut_30pct",
+        name="mult3",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=2.0,
-        fake_edge_multiplier=5.0,
-        p_missing_real=0.2,
-        p_mediated_shortcut=0.3,
+        fake_edge_multiplier=3.0,
+        p_missing_real=0.0,
+        p_mediated_shortcut=0.0,
         seeds=_SEEDS,
     ),
     BenchmarkConfig(
-        name="missing_50pct_shortcut_30pct",
+        name="mult4",
         dag_params=_DAG_PARAMS,
         fake_node_multiplier=2.0,
-        fake_edge_multiplier=5.0,
-        p_missing_real=0.5,
-        p_mediated_shortcut=0.3,
+        fake_edge_multiplier=4.0,
+        p_missing_real=0.0,
+        p_mediated_shortcut=0.0,
         seeds=_SEEDS,
     ),
+
+        BenchmarkConfig(
+        name="mult5",
+        dag_params=_DAG_PARAMS,
+        fake_node_multiplier=2.0,
+        fake_edge_multiplier=0.0,
+        p_missing_real=0.0,
+        p_mediated_shortcut=0.0,
+        seeds=_SEEDS,
+    ),
+
 ]
 
 
