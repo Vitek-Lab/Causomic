@@ -353,12 +353,13 @@ def _bfs_all_dists_backward(
                     q.append((u, nd))
     return dists
 
-def query_drug_targets(graph: nx.DiGraph, 
+def query_drug_targets(graph: nx.DiGraph,
                        drug: str,
                        target_ev_filter: int = 1,
                        target_src_filter: int = 1,
-                       target_curated_filter: bool = False) -> pd.DataFrame:
-    
+                       target_curated_filter: bool = False,
+                       source_filter: Optional[List[str]] = None) -> pd.DataFrame:
+
     """
     Query drug targets from a directed graph and return aggregated evidence data.
     This function retrieves all direct targets of a given drug from a NetworkX directed graph,
@@ -370,6 +371,14 @@ def query_drug_targets(graph: nx.DiGraph,
         drug (str): The drug node identifier to query targets for.
         target_ev_filter (int, optional): Minimum total evidence count required for a target
             to be included in results. Defaults to 1.
+        target_src_filter (int, optional): Minimum number of distinct sources required.
+            Defaults to 1.
+        target_curated_filter (bool, optional): If True, only include curated edges.
+            Defaults to False.
+        source_filter (list of str, optional): If provided, only count evidence from
+            statements whose source_counts contain at least one of the given source keys.
+            evidence_count and source_count are recomputed from those sources only.
+            Defaults to None (all sources included).
     Returns:
         pd.DataFrame: A DataFrame containing:
             - source: The drug identifier (str)
@@ -385,21 +394,40 @@ def query_drug_targets(graph: nx.DiGraph,
         - Missing or malformed evidence data defaults to 0.
         - Results are aggregated by unique source-target pairs.
     """
-    
+
     edges_list: List[tuple] = []
     for successor in graph.successors(drug):
         edge = graph[drug][successor]
-        ev = edge.get("evidence", {}).get("total_evidence", 0)
-        src = edge.get("evidence", {}).get("source_evidence", 0)
-        curated = edge.get("evidence", {}).get("curated", [False])[0]
+        stmts = edge.get("statements", []) or []
+        curated = any(stmt.get("curated", False) for stmt in stmts)
+        if source_filter is not None:
+            filtered_ev = 0
+            filtered_sources: set = set()
+            for stmt in stmts:
+                sc = stmt.get("source_counts")
+                if isinstance(sc, dict):
+                    for k in source_filter:
+                        if k in sc:
+                            filtered_ev += sc[k]
+                            filtered_sources.add(k)
+            ev = filtered_ev
+            src = len(filtered_sources)
+        else:
+            ev = sum(int(stmt.get("evidence_count") or 0) for stmt in stmts)
+            all_sources: set = set()
+            for stmt in stmts:
+                sc = stmt.get("source_counts")
+                if isinstance(sc, dict):
+                    all_sources.update(sc.keys())
+            src = len(all_sources)
         if ev >= target_ev_filter and src >= target_src_filter and (not target_curated_filter or curated):
             edges_list.append(
                 (
                     drug,
                     successor,
-                    edge["evidence"]["total_evidence"],
-                    edge["evidence"]["source_evidence"],
-                    any(edge["evidence"]["curated"]),
+                    ev,
+                    src,
+                    curated,
                 )
             )
     
@@ -567,7 +595,7 @@ def query_forward_paths(
 
 def main():
 
-    file = '/Users/kohler.d/Downloads/updated_protein_INDRA (1).pkl'
+    file = '//mnt//c//Users//devon//Downloads//indranet_dir_graph_fix_corr_weights.pkl'
     import pickle
 
     import numpy as np
@@ -591,8 +619,9 @@ def main():
     np.dtype = _orig_dtype
     
     query_drug_targets(graph, 
-                        drug="idarubicin",
-                        target_ev_filter= 1)
+                        drug="doxorubicin",
+                        target_ev_filter= 1,
+                        source_filter=["drugbank", "signor"])
 
 if __name__ == "__main__":
     main()
