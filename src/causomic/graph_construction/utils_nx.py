@@ -303,14 +303,21 @@ def filtered_paths(
 
 
 def _bfs_all_dists_forward(
-    graph: nx.DiGraph, source: str, cutoff: int, thr: int, src_thr: int
+    graph: nx.DiGraph,
+    source: str,
+    cutoff: int,
+    thr: int,
+    src_thr: int,
+    excluded: Optional[set] = None,
 ) -> dict:
     """BFS forward from source; returns {node: set of hop-distances from source}.
 
     Tracks all reachable distances (not just shortest) so that edges on longer
-    sub-paths are not missed when checking path membership.
+    sub-paths are not missed when checking path membership. Nodes in
+    ``excluded`` are not traversed into, so paths cannot route through them.
     """
     from collections import deque
+    excluded = excluded or set()
     dists: dict = {source: {0}}
     q = deque([(source, 0)])
     while q:
@@ -318,6 +325,8 @@ def _bfs_all_dists_forward(
         if d >= cutoff:
             continue
         for v in graph.successors(u):
+            if v in excluded:
+                continue
             if edge_ok(graph, u, v, thr, src_thr):
                 nd = d + 1
                 if v not in dists:
@@ -329,14 +338,21 @@ def _bfs_all_dists_forward(
 
 
 def _bfs_all_dists_backward(
-    graph: nx.DiGraph, target: str, cutoff: int, thr: int, src_thr: int
+    graph: nx.DiGraph,
+    target: str,
+    cutoff: int,
+    thr: int,
+    src_thr: int,
+    excluded: Optional[set] = None,
 ) -> dict:
     """BFS backward from target; returns {node: set of hop-distances to target}.
 
     Traverses predecessor edges so distances represent hops remaining to reach
-    target on a forward path.
+    target on a forward path. Nodes in ``excluded`` are not traversed into, so
+    paths cannot route through them.
     """
     from collections import deque
+    excluded = excluded or set()
     dists: dict = {target: {0}}
     q = deque([(target, 0)])
     while q:
@@ -344,6 +360,8 @@ def _bfs_all_dists_backward(
         if d >= cutoff:
             continue
         for u in graph.predecessors(v):
+            if u in excluded:
+                continue
             if edge_ok(graph, u, v, thr, src_thr):
                 nd = d + 1
                 if u not in dists:
@@ -453,7 +471,7 @@ def query_effect_nodes(
     with aggregated evidence counts and source counts.
     Args:
         graph (nx.DiGraph): A NetworkX directed graph where nodes represent effects
-            and edges contain evidence metadata.
+            and edges contain a list of INDRA statements.
         effect (str): The effect node identifier to query predecessors for.
         target_ev_filter (int, optional): Minimum total evidence count required for a predecessor
             to be included in results. Defaults to 1.
@@ -463,12 +481,13 @@ def query_effect_nodes(
             - target: The effect identifier (str)
             - evidence_count: Total aggregated evidence count (int)
             - source_count: Total aggregated source count (int)
+            - stmt_types: List of statement types (relations) making up the edge
             Rows are grouped by source-target pairs with summed evidence metrics.
     Raises:
         nx.NodeNotFound: If the effect node does not exist in the graph.
     Notes:
-        - Edge data is expected to have an 'evidence' dictionary with keys 'total_evidence'
-            and 'source_evidence'.
+        - Edge data is expected to have a 'statements' list where each statement
+            has 'evidence_count', 'source_counts', and 'stmt_type' keys.
         - Missing or malformed evidence data defaults to 0.
         - Results are aggregated by unique source-target pairs.
     """
@@ -476,22 +495,26 @@ def query_effect_nodes(
     edges_list: List[tuple] = []
     for predecessor in graph.predecessors(effect):
         edge = graph[predecessor][effect]
-        ev = edge.get("evidence", {}).get("total_evidence", 0)
+        statements = edge.get("statements", [])
+        ev = sum(stmt.get("evidence_count", 0) for stmt in statements)
+        src = sum(
+            sum(stmt.get("source_counts", {}).values()) for stmt in statements
+        )
+        stmt_types = [stmt.get("stmt_type") for stmt in statements if stmt.get("stmt_type")]
+
         if ev >= target_ev_filter:
-            edges_list.append(
-                (
-                    predecessor,
-                    effect,
-                    edge["evidence"]["total_evidence"],
-                    edge["evidence"]["source_evidence"],
-                )
-            )
+            edges_list.append((predecessor, effect, ev, src, stmt_types))
 
     result_df = pd.DataFrame(
-        edges_list, columns=["source", "target", "evidence_count", "source_count"]
+        edges_list,
+        columns=["source", "target", "evidence_count", "source_count", "stmt_types"],
     )
     result_df = result_df.groupby(["source", "target"], as_index=False).agg(
-        {"evidence_count": "sum", "source_count": "sum"}
+        {
+            "evidence_count": "sum",
+            "source_count": "sum",
+            "stmt_types": lambda lists: [t for sub in lists for t in sub],
+        }
     )
     return result_df
     
@@ -510,6 +533,11 @@ def query_forward_paths(
     paths with exactly that many intermediate nodes between the start and
     end nodes. This corresponds to path lengths of ``mediator_count + 1``
     edges, subject to the corresponding evidence and source count thresholds.
+
+    Paths are not allowed to pass through any other start node: when
+    searching from a given ``start`` to a given ``end``, any node in
+    ``start_nodes`` other than ``start`` (and ``end`` itself, if it happens
+    to be in ``start_nodes``) is excluded from intermediate traversal.
 
     Args:
         graph: DiGraph annotated with evidence counts on edges.
@@ -545,22 +573,30 @@ def query_forward_paths(
         raise ValueError("med_src_filter must have length n_mediators + 1")
 
     end_nodes_list = list(end_nodes)
+    start_nodes_list = list(start_nodes)
+    start_nodes_set = set(start_nodes_list)
     seen_edges: set = set()
     forward_edge_list: List[tuple] = []
 
-    for start in tqdm(list(start_nodes), desc="Processing start nodes"):
+    for start in tqdm(start_nodes_list, desc="Processing start nodes"):
         if start not in graph.nodes:
             print(f"Start node '{start}' is missing from graph. Skipping.")
             continue
 
         for end in end_nodes_list:
+            excluded = start_nodes_set - {start, end}
+
             for med in range(0, n_mediators + 1):
                 cutoff = med + 1
                 thr = med_ev_filter[med]
                 src_thr = med_src_filter[med]
 
-                fwd = _bfs_all_dists_forward(graph, start, cutoff, thr, src_thr)
-                bwd = _bfs_all_dists_backward(graph, end, cutoff, thr, src_thr)
+                fwd = _bfs_all_dists_forward(
+                    graph, start, cutoff, thr, src_thr, excluded=excluded
+                )
+                bwd = _bfs_all_dists_backward(
+                    graph, end, cutoff, thr, src_thr, excluded=excluded
+                )
 
                 for u, v, edata in graph.edges(data=True):
                     if u == v:
@@ -594,7 +630,36 @@ def query_forward_paths(
 
 
 def main():
+    from indra.databases import uniprot_client, hgnc_client
 
+    def uniprot_to_hgnc_name(uniprot_mnemonic):
+        """Get an HGNC ID from a UniProt mnemonic."""
+        uniprot_id = uniprot_client.get_id_from_mnemonic(uniprot_mnemonic)
+        if uniprot_id:
+            return uniprot_client.get_gene_name(uniprot_id)
+        else:
+            return None
+    def prepare_data(input_data: pd.DataFrame, drug_name: list[str], missing_threshold: float = 0.5) -> pd.DataFrame:
+        """Prepare input data for graph estimation."""
+        try:
+            input_data = input_data.copy()
+            input_data["Protein"] = input_data["Protein"].apply(uniprot_to_hgnc_name)
+            input_data = input_data.drop_duplicates(subset=["Protein", "SUBJECT"])
+            input_data = input_data.loc[input_data["Protein"].notnull()]
+            # pattern = "|".join(re.escape(d) for d in drug_name)
+
+            # input_data = input_data.loc[
+            #     ~input_data["GROUP"].str.contains(pattern, na=False, case=False, regex=True)
+            # ]
+            input_data = input_data.pivot(index="SUBJECT", columns="Protein", values="LogIntensities")
+            missing_percentage = input_data.isnull().mean()
+            # input_data = input_data.loc[:, missing_percentage[missing_percentage < missing_threshold].index]
+            
+            return input_data
+        
+        except Exception as exc:
+            raise RuntimeError(f"Failed while preparing data for drug '{drug_name}': {exc}") from exc
+        
     file = '//mnt//c//Users//devon//Downloads//indranet_dir_graph_fix_corr_weights.pkl'
     import pickle
 
@@ -617,11 +682,20 @@ def main():
         graph = pickle.load(f)
 
     np.dtype = _orig_dtype
-    
-    query_drug_targets(graph, 
-                        drug="doxorubicin",
-                        target_ev_filter= 1,
-                        source_filter=["drugbank", "signor"])
+
+    data = pd.read_csv("/mnt/f/OneDrive - Northeastern University/Northeastern/Research/Causal_Inference/MS_causal_inference/benchmarks/data/protein/protein_data.csv")
+    input_data = prepare_data(data, ["troglitazone"])
+    input_names = list(input_data.columns)
+    input_names.append("Chemical and Drug Induced Liver Injury")
+
+    filtered_graph = prepare_graph(graph, input_names, 
+                            ["HGNC", "MESH", "CHEBI"], 
+                            ["gene_disease_association", "Inhibition", 
+                                "DecreaseAmount", "Activation", "IncreaseAmount"])
+    dili_targets = query_effect_nodes(
+        filtered_graph,
+        "Chemical and Drug Induced Liver Injury",
+        target_ev_filter = 1)
 
 if __name__ == "__main__":
     main()
