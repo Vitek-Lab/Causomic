@@ -59,8 +59,6 @@ numpyro.set_host_device_count(4)
 # else:
 device = "cpu"  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print(f"Using device: {device}")
-
 
 @dataclass
 class ScaleStats:
@@ -789,7 +787,9 @@ class LVM:
         pyro.set_rng_seed(1234)
 
         # Initialize the model
-        model_cls = StochasticEdgeProteomicModel if self.stochastic_edges else ProteomicPerturbationModel
+        model_cls = (
+            StochasticEdgeProteomicModel if self.stochastic_edges else ProteomicPerturbationModel
+        )
         model = model_cls(
             n_obs=len(self.input_data),
             root_nodes=self.root_nodes,
@@ -909,7 +909,7 @@ class LVM:
 
         if verbose and steps_no_improve < self.patience:
             print(f"Training completed at step {self.num_steps} (best ema {best_ema:.4f})")
-            
+
         self.model = model
         self.guide = guide
 
@@ -941,8 +941,9 @@ class LVM:
             raise AttributeError("Model must be fitted before adding imputed values")
 
         # Convert data to long format for easier manipulation
-        long_data = pd.melt(self._from_z(self.input_data), 
-                            var_name="protein", value_name="intensity")
+        long_data = pd.melt(
+            self._from_z(self.input_data), var_name="protein", value_name="intensity"
+        )
 
         # Replace zeros (used for missing values in model) with NaN
         long_data.loc[long_data["intensity"] == 0, "intensity"] = np.nan
@@ -979,8 +980,7 @@ class LVM:
                     imputed_values = imputation_long.loc[
                         imputation_long["protein"] == protein, "imp_loc"
                     ].values
-                    converted = self._from_z(
-                        pd.DataFrame(imputed_values, columns = [protein]))
+                    converted = self._from_z(pd.DataFrame(imputed_values, columns=[protein]))
                     long_data.loc[mask, "imp_mean"] = converted[protein].values
 
         elif self.backend == "numpyro":
@@ -1372,153 +1372,3 @@ class LVM:
         # Extract outcome predictions
         self.posterior_samples = baseline_predictions[outcome_node]
         self.intervention_samples = intervention_predictions[outcome_node]
-
-
-def main() -> None:
-    """
-    Example usage and testing of the LVM class.
-
-    This function demonstrates a complete workflow using the LVM for causal
-    inference on a simulated mediator model. It shows:
-    1. Data simulation with missing values
-    2. Data processing and normalization
-    3. Model fitting with Pyro backend
-    4. Intervention analysis
-    5. Visualization of results
-    """
-    import matplotlib.pyplot as plt
-
-    from causomic.simulation.example_graphs import mediator, signaling_network
-
-    print("=== LVM Example Workflow ===")
-
-    # Generate mediator graph and simulate data
-    print("1. Generating mediator model and simulating data...")
-    med_graph = signaling_network(add_independent_nodes=False)  # , output_node=True)
-
-    simulated_data = simulate_data(
-        med_graph["Networkx"],
-        coefficients=med_graph["Coefficients"],
-        add_error=False,
-        mnar_missing_param=[-5, 0.4],  # Missing not at random
-        add_feature_var=True,
-        n=100,
-        seed=2,
-    )
-
-    # Process feature-level data to protein-level
-    print("2. Processing feature-level data...")
-    input_data = dataProcess(
-        simulated_data["Feature_data"],
-        normalization=False,
-        summarization_method="TMP",
-        MBimpute=False,
-        sim_data=True,
-    )
-
-    # input_data.loc[:, "Output"] = simulated_data["Protein_data"]["Output"]
-
-    # Fit LVM model
-    print("4. Fitting LVM model with Pyro backend...")
-    lvm = LVM(backend="pyro", num_steps=2000, verbose=True)
-    lvm.fit(input_data, med_graph["causomic"])
-
-    # Perform intervention analysis
-    print("5. Performing intervention analysis...")
-    intervention_value = 3.0
-    lvm.intervention({"X": intervention_value}, ["M1", "Z"])
-
-    # Process imputed data for visualization
-    print("6. Processing imputed data...")
-    imputed_data = lvm.imputed_data.copy()
-    imputed_data["intensity"] = np.where(
-        imputed_data["was_missing"], imputed_data["imp_mean"], imputed_data["intensity"]
-    )
-
-    # Create wide format for plotting
-    imputed_data["index"] = np.tile(
-        np.arange(1, len(input_data) + 1), len(imputed_data["protein"].unique())
-    )
-    lvm_imputed = imputed_data.pivot(index="index", columns="protein", values="intensity")
-
-    # Visualization 1: Imputed vs Original Data
-    print("7. Creating visualizations...")
-    plt.figure(figsize=(12, 5))
-
-    plt.subplot(1, 2, 1)
-    missing_indices = imputed_data[imputed_data["was_missing"]]["index"].unique()
-    colors = ["red" if idx in missing_indices else "blue" for idx in lvm_imputed.index]
-
-    plt.scatter(lvm_imputed["M1"], lvm_imputed["Z"], alpha=0.6, c=colors, s=20)
-    plt.xlabel("M1 (Mediator)")
-    plt.ylabel("Z (Outcome)")
-    plt.title("M1 vs Z\n(Red: Imputed, Blue: Observed)")
-    plt.grid(True, alpha=0.3)
-
-    # Visualization 2: Distribution by Output
-    plt.subplot(1, 2, 2)
-    for output_val in sorted(input_data["Output"].unique()):
-        subset = input_data[input_data["Output"] == output_val]
-        plt.hist(subset["X"], bins=20, alpha=0.6, label=f"Output={output_val}")
-
-    plt.xlabel("X (Treatment)")
-    plt.ylabel("Count")
-    plt.title("Distribution of X by Output")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
-
-    # Intervention analysis across multiple values
-    print("8. Analyzing intervention effects across values...")
-    intervention_values = [0, 1, 2, 3, 4, 5, 6]
-    intervention_results = []
-
-    for value in intervention_values:
-        lvm.intervention({"X": value}, "Output")
-        mean_effect = lvm.intervention_samples.mean()
-        std_effect = lvm.intervention_samples.std()
-        intervention_results.append((value, mean_effect, std_effect))
-
-    # Plot intervention effects
-    plt.figure(figsize=(10, 6))
-    values, means, stds = zip(*intervention_results)
-
-    plt.errorbar(
-        values,
-        means,
-        yerr=stds,
-        fmt="o-",
-        capsize=5,
-        color="royalblue",
-        ecolor="darkorange",
-        linewidth=2,
-        markersize=8,
-        markeredgewidth=2,
-    )
-
-    plt.xlabel("Intervention Value (X)", fontsize=12)
-    plt.ylabel("Expected Outcome (Output)", fontsize=12)
-    plt.title("Causal Effect of X on Output", fontsize=14, fontweight="bold")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-    print(f"\n=== Results Summary ===")
-    print(f"Model fitted with {len(lvm)} observations")
-    print(f"Missing data imputed: {lvm.imputed_data['was_missing'].sum():.0f} values")
-    print(f"Intervention effects range: {min(means):.3f} to {max(means):.3f}")
-    print("Analysis completed successfully!")
-
-    # import pickle
-    # with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/lvm_model.pkl", "rb") as file:
-    #     lvm = pickle.load(file)
-
-    # test = lvm.intervention({"NQO1" : 5},
-    #                  "SOD1", predictive_samples=100)
-    # print(test)
-
-
-if __name__ == "__main__":
-    main()

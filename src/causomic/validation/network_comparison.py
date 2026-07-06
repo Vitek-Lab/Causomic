@@ -1,3 +1,10 @@
+"""Baseline structure-learning methods for benchmarking.
+
+Wraps standard causal-discovery algorithms -- PC, hill-climbing (HC), and NOTEARS
+-- behind a common interface so their learned networks can be compared against
+causomic-derived networks. NOTEARS support is optional (``causomic[notears]``).
+"""
+
 import pandas as pd
 import numpy as np
 import networkx as nx
@@ -10,6 +17,7 @@ try:
 except ImportError:
     notears_linear = None
 
+
 def _model_to_nx(model) -> nx.DiGraph:
     """Convert a pgmpy DAG/PDAG/BayesianModel to a DiGraph."""
     G = nx.DiGraph()
@@ -18,24 +26,26 @@ def _model_to_nx(model) -> nx.DiGraph:
     G.add_edges_from(list(model.edges()))
     return G
 
+
 def _standardize(X: np.ndarray) -> np.ndarray:
     """Z-score features column-wise (genes)."""
     X = np.asarray(X, dtype=float)
     return StandardScaler(with_mean=True, with_std=True).fit_transform(X)
+
 
 def fit_pc(
     df: pd.DataFrame,
     return_type: str = "pdag",
 ) -> Tuple[nx.DiGraph, object]:
     """
-    PC algorithm (constraint-based).
+    PC algorithm (constraint-based) via pgmpy.
+
     Parameters
     ----------
-    X : array-like, shape (n_samples, n_genes)
-    names : optional list of column (gene) names
-    alpha : significance level for CI tests
-    ci_test : 'pearsonr' (linear) | 'kci' (nonlinear) | 'chisq' (discrete)
-    return_type : 'pdag' (CPDAG) or 'dag' (fully oriented by rules)
+    df : pd.DataFrame
+        Wide-format data with one column per variable (gene).
+    return_type : str, default 'pdag'
+        'pdag' (CPDAG) or 'dag' (fully oriented by Meek's rules).
 
     Returns
     -------
@@ -49,16 +59,14 @@ def fit_pc(
     return G, model
 
 
-def fit_hc(
-    df: pd.DataFrame
-) -> Tuple[nx.DiGraph, object]:
+def fit_hc(df: pd.DataFrame) -> Tuple[nx.DiGraph, object]:
     """
-    Hill Climb Search via pgmpy.
+    Hill-climb structure search via pgmpy (Gaussian BIC score).
+
     Parameters
     ----------
-    score : 'bic' | 'k2'
-    ci_test : 'pearsonr' (continuous) | 'chisq' (discrete) | 'kci'
-    max_indegree : optional integer cap during hill-climb
+    df : pd.DataFrame
+        Wide-format data with one column per variable (gene).
 
     Returns
     -------
@@ -106,17 +114,15 @@ def fit_notears(
 
     p = X.shape[1]
 
-    W = notears_linear(
-        X, lambda1=lambda1, loss_type=loss_type, max_iter=max_iter
-    )
-    
+    W = notears_linear(X, lambda1=lambda1, loss_type=loss_type, max_iter=max_iter)
+
     names = df.columns.tolist()
     G = nx.DiGraph()
     G.add_nodes_from(names)
 
     # NOTEARS: W[i, j] = j -> i
-    for i in range(p):        # child
-        for j in range(p):    # parent
+    for i in range(p):  # child
+        for j in range(p):  # parent
             if i == j:
                 continue
             if abs(W[i, j]) > w_threshold:

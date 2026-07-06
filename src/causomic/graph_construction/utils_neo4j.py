@@ -86,16 +86,18 @@ def get_neighbor_network(
     ... )
     >>> print(f"Found {len(neighbors)} upstream regulators")
     """
-    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])  
-            
+    nodes_str = ", ".join(["'%s'" % norm_id(*node) for node in nodes])
+
     # Construct query pattern based on direction requirements
     if upstream and downstream:
         q = "p=(n2:BioEntity)-[r1:indra_rel]->(n1:BioEntity)-[r2:indra_rel]->(n3:BioEntity)"
         relations = f"AND r1.stmt_type IN {relation}" + f" AND r2.stmt_type IN {relation}"
-        evidence_relations = minimum_evidence_helper(
-            minimum_evidence_count, "r1") + " " + minimum_evidence_helper(
-                minimum_evidence_count, "r2")
-    elif upstream and not downstream: 
+        evidence_relations = (
+            minimum_evidence_helper(minimum_evidence_count, "r1")
+            + " "
+            + minimum_evidence_helper(minimum_evidence_count, "r2")
+        )
+    elif upstream and not downstream:
         q = "p=(n2:BioEntity)-[r1:indra_rel]->(n1:BioEntity)"
         relations = f"AND r1.stmt_type IN {relation}"
         evidence_relations = minimum_evidence_helper(minimum_evidence_count, "r1")
@@ -112,7 +114,7 @@ def get_neighbor_network(
         filter = f"AND n2.id IN [{nodes_str}]"
     else:
         filter = ""
-    
+
     query = f"""\
         MATCH {q}
         WHERE
