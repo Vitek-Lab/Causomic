@@ -1,3 +1,9 @@
+"""Repair posterior DAGs by resolving failed conditional-independence tests.
+
+Converts learned posterior DAGs to y0 graphs and processes failed CI tests to
+propose fixes, such as introducing latent confounders between affected nodes.
+"""
+
 from itertools import combinations
 
 import networkx as nx

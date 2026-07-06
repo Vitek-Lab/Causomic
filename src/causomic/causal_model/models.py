@@ -114,7 +114,7 @@ class ProteomicPerturbationModel(PyroModule):
                     ),
                 )
 
-            if node_name not in "Output":
+            if "Output" not in node_name:
                 downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
                     f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
                 )
@@ -317,7 +317,7 @@ class StochasticEdgeProteomicModel(PyroModule):
                     edge_prob = torch.tensor(edge_prob, dtype=torch.float32, device=device)
                 edge_probs[f"{node_name}_{item}_edge"] = edge_prob
 
-            if node_name not in "Output":
+            if "Output" not in node_name:
                 downstream_coef_dict_scale[f"{node_name}_scale"] = pyro.sample(
                     f"{node_name}_scale", pyro_dist.Exponential(torch.tensor(1.0, device=device))
                 )

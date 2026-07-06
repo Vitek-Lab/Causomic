@@ -1,3 +1,10 @@
+"""End-to-end benchmark workflow for validating the LVM pipeline.
+
+Extracts a prior network from INDRA, reconciles it with experimental data,
+fits the latent-variable model, performs interventions, and compares predictions
+against differential-analysis results and simpler baselines.
+"""
+
 # Create a benchmark workflow to validate the LVM implementation
 # - Select drug for testing (troglitazone?)
 # - Define start and end nodes (small network for quick testing)
@@ -54,7 +61,13 @@ def uniprot_to_hgnc_name(uniprot_mnemonic):
 
 
 def reconcile_network(
-    prior_network, data, prior_weight=1, criterion="bic", n_bootstrap=100, edge_probability=0.9
+    prior_network,
+    data,
+    prior_weight=1,
+    criterion="bic",
+    n_bootstrap=100,
+    edge_probability=0.9,
+    verbose=True,
 ):
 
     # Prep data
@@ -66,7 +79,8 @@ def reconcile_network(
             knn_imputer.fit_transform(data), index=data.index, columns=data.columns
         )
     else:
-        print("No missing values in the data.")
+        if verbose:
+            print("No missing values in the data.")
     input_data_imputed.columns = input_data_imputed.columns.str.replace("-", "")
 
     # Define blacklist
@@ -224,7 +238,7 @@ def driz_report(y, yhat, p=1.0, tau=None):
     }
 
 
-def validate_model(model, intervention, target, ground_truth):
+def validate_model(model, intervention, target, ground_truth, verbose=True):
 
     try:
         target = [str(t).replace("-", "") for t in target]
@@ -264,9 +278,11 @@ def validate_model(model, intervention, target, ground_truth):
     save_path = os.path.join(data_folder, fname)
     try:
         comparison_df.to_csv(save_path, index=True)
-        print(f"Saved comparison_df to {save_path}")
+        if verbose:
+            print(f"Saved comparison_df to {save_path}")
     except Exception as e:
-        print(f"Failed to save comparison_df: {e}")
+        if verbose:
+            print(f"Failed to save comparison_df: {e}")
 
     # Reassign aligned series so the existing return call uses the merged data
     gt_values = comparison_df["ground_truth"]
@@ -655,93 +671,3 @@ def parse_args():
     parser.add_argument("--password", type=str, default=None)
     parser.add_argument("--log_file", type=str, default=None)
     return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    data_folder = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
-
-    log_file = args.log_file or os.path.join(
-        data_folder, f"benchmark_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    )
-    run_benchmark(
-        one_step_evidence=args.one_step_evidence,
-        two_step_evidence=args.two_step_evidence,
-        three_step_evidence=args.three_step_evidence,
-        confounder_evidence=args.confounder_evidence,
-        prior_weight=args.prior_weight,
-        criterion=args.criterion,
-        n_bootstrap=args.n_bootstrap,
-        edge_probability=args.edge_probability,
-        add_high_corr_edges_to_priors=False,
-        api_url=args.api_url,
-        password=args.password,
-        log_file=log_file,
-    )
-
-
-# def main():
-
-#     print("Starting benchmark workflow...")
-#     # Calculated externally
-#     trog_targets = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1']
-
-#     dili_targets = ['ABCC2', 'ALB', 'CAT', 'CYP2C19', 'CYP2C9',
-#                      'CYP2E1', 'ENO1', 'GPT', 'GSR', 'GSTM1',
-#                      'GSTT1', 'HLA-A', 'HMOX1', 'HPD', 'KNG1',
-#                      'MTHFR', 'NAT2', 'SOD1']
-
-#     # INDRA client
-#     client = Neo4jClient(
-#         url=os.getenv("API_URL"),
-#         auth=("neo4j", os.getenv("PASSWORD"))
-#     )
-
-#     # Load data & prep for model
-#     data_folder = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data')
-#     input_data_path = os.path.join(data_folder, 'model_input.csv')
-#     input_data = pd.read_csv(input_data_path)
-
-#     # Randomly split input_data into two equal parts
-#     input_data_graph, input_data_scm = train_test_split(
-#         input_data, test_size=0.5, random_state=42)
-
-#     print("Extracting network from INDRA...")
-#     indra_prior = extract_network(
-#         trog_targets, dili_targets, input_data_graph.columns, client,
-#         one_step_evidence=3, two_step_evidence=3,
-#         three_step_evidence=6, confounder_evidence=10)
-
-#     print("Reconciling network with data...")
-#     # Reconcile network with data
-#     posterior_network = reconcile_network(
-#         indra_prior, input_data_graph, prior_weight=1,
-#         criterion='bic', n_bootstrap=100, edge_probability=.9)
-
-#     print("Fitting causal model...")
-#     model = fit_causal_model(posterior_network, input_data_scm)
-
-#     print("Validating model...")
-#     gt_df = pd.read_csv(os.path.join(data_folder, "model.csv"))
-#     gt_df['Protein'] = gt_df['Protein'].apply(lambda x: uniprot_to_hgnc_name(x))
-
-#     # Prepare data for intervention
-#     intervention = gt_df.loc[(gt_df["Protein"].isin(trog_targets)) &
-#                              (gt_df["Label"] == "troglitazone_200 - DMSO_0"),
-#                              ["Protein", "log2FC"]]
-#     intervention = dict(zip(intervention["Protein"], intervention["log2FC"]))
-
-#     outcome = gt_df.loc[(gt_df["Protein"].isin(dili_targets)) &
-#                         (gt_df["Label"] == "troglitazone_200 - DMSO_0"),
-#                         ["Protein", "log2FC"]]
-#     outcome = dict(zip(outcome["Protein"], outcome["log2FC"]))
-
-#     validation_summary = validate_model(model, intervention, dili_targets, outcome)
-
-#     print("Validation summary:")
-#     for k, v in validation_summary.items():
-#         if k != "driz_per_sample":
-#             print(f"{k}: {v}")
-
-if __name__ == "__main__":
-    main()

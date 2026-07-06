@@ -1,9 +1,9 @@
+import json
 import os
 import sys
-import json
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 # Ensure src/ is on sys.path so tests can import the package directly
 TEST_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -55,11 +55,13 @@ def test_prep_msstats_data_handles_duplicates_and_pivot():
 
 def test_gen_correlation_matrix_basic():
     # Create a small wide dataframe where A and B are positively correlated but not perfect
-    df = pd.DataFrame({
-        "A": [1.0, 2.0, 3.0, 4.0],
-        "B": [1.1, 1.9, 3.05, 4.2],
-        "C": [10.0, 9.0, 7.0, 3.0],
-    })
+    df = pd.DataFrame(
+        {
+            "A": [1.0, 2.0, 3.0, 4.0],
+            "B": [1.1, 1.9, 3.05, 4.2],
+            "C": [10.0, 9.0, 7.0, 3.0],
+        }
+    )
 
     corr = gs.gen_correlation_matrix(df, methods=["pearson"], abs_corr=False)
     assert "pearson" in corr

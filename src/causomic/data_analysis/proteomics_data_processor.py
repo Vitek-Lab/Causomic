@@ -87,7 +87,7 @@ def format_sim_data(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def normalize_median(data: pd.DataFrame) -> pd.DataFrame:
+def normalize_median(data: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     """
     Apply median-based normalization to intensity data.
 
@@ -140,7 +140,8 @@ def normalize_median(data: pd.DataFrame) -> pd.DataFrame:
     # Remove temporary columns
     data = data.drop(columns=["ABUNDANCE_RUN", "ABUNDANCE_FRACTION"])
 
-    print("INFO: Median-based normalization completed successfully")
+    if verbose:
+        print("INFO: Median-based normalization completed successfully")
 
     return data
 
@@ -234,10 +235,7 @@ def imputation(data: pd.DataFrame) -> pd.DataFrame:
     feature_dummies = pd.get_dummies(keep_data["Feature"], prefix="Feature")
 
     # Combine predictors with target variable
-    model_data = pd.concat(
-        [run_dummies, feature_dummies, keep_data["Intensity"]], 
-        axis=1
-    )
+    model_data = pd.concat([run_dummies, feature_dummies, keep_data["Intensity"]], axis=1)
 
     # Split into training (non-missing) and prediction (missing) sets
     train_mask = model_data["Intensity"].notna()
@@ -572,61 +570,3 @@ def dataProcess(
     summarized_data = summarize_data(processed_data, summarization_method, MBimpute)
 
     return summarized_data
-
-
-def main() -> None:
-    """
-    Example usage and testing of the dataProcess function.
-
-    This function demonstrates how to use the dataProcess pipeline with
-    simulated data from the causomic package. It creates a signaling
-    network, simulates data with missing values, processes it, and visualizes
-    the results.
-    """
-    try:
-        from causomic.simulation.example_graphs import signaling_network
-        from src.causomic.simulation.proteomics_simulator import simulate_data
-    except ImportError as e:
-        print(f"Error importing causomic modules: {e}")
-        print("Please ensure causomic is properly installed")
-        return
-
-    # Generate example signaling network
-    network_data = signaling_network(add_independent_nodes=False)
-
-    # Simulate mass spectrometry data with missing values
-    simulated_data = simulate_data(
-        network_data["Networkx"],
-        coefficients=network_data["Coefficients"],
-        mnar_missing_param=[-5, 0.4],  # Missing not at random parameters
-        add_feature_var=True,
-        n=25,  # Number of replicates
-        seed=3,
-    )
-
-    # Process the simulated feature data
-    processed_data = dataProcess(
-        data=simulated_data["Feature_data"],
-        normalization=False,  # Skip normalization for simulated data
-        summarization_method="TMP",
-        MBimpute=True,
-        sim_data=True,
-    )
-
-    # Visualize results: scatter plot of two proteins
-    if "SOS" in processed_data.columns and "Ras" in processed_data.columns:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(processed_data["SOS"], processed_data["Ras"], alpha=0.7)
-        ax.set_xlabel("SOS Protein Abundance")
-        ax.set_ylabel("Ras Protein Abundance")
-        ax.set_title("Processed Protein Abundances: SOS vs Ras")
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
-    else:
-        print("SOS and/or Ras proteins not found in processed data")
-        print(f"Available proteins: {list(processed_data.columns)}")
-
-
-if __name__ == "__main__":
-    main()

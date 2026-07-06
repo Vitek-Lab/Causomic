@@ -161,3 +161,10 @@ cython_debug/
 
 .DS_Store
 .vscode/
+
+# Claude Code local files
+.claude/
+
+# Local model checkpoints and stray plot artifacts
+checkpoints/
+output.png
