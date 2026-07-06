@@ -51,10 +51,7 @@ def add_evidence_info(graph: nx.DiGraph) -> nx.DiGraph:
         source_keys = len(source_key_union)
 
         # unique statement types across statements
-        stmt_types = list(set(
-            s.get("stmt_type") for s in stmts 
-            if s.get("stmt_type") is not None
-        ))
+        stmt_types = list(set(s.get("stmt_type") for s in stmts if s.get("stmt_type") is not None))
 
         # attach a fresh dict per edge (do not reuse mutable objects)
         new_ev: Dict[str, Any] = {
@@ -92,6 +89,7 @@ def filter_graph_by_evidence_count(graph: nx.DiGraph, evidence_count: int) -> nx
     filtered_graph = graph.edge_subgraph(edges_to_keep).copy()
 
     return filtered_graph
+
 
 def prepare_graph(
     graph: nx.DiGraph,
@@ -134,7 +132,9 @@ def prepare_graph(
         total=graph.number_of_edges(),
         desc="Preparing graph",
     ):
-        if measured_node_set is not None and (u not in measured_node_set or v not in measured_node_set):
+        if measured_node_set is not None and (
+            u not in measured_node_set or v not in measured_node_set
+        ):
             continue
         if allowed_node_types is not None and node_attrs[u].get("ns") not in allowed_node_types:
             continue
@@ -159,7 +159,7 @@ def prepare_graph(
             filtered_statements.append(stmt)
             total_evidence += int(stmt.get("evidence_count") or 0)
             stmt_type_union.add(stmt_type)
-            
+
             curated_flag = stmt.get("curated", False)
             curated_union.add(curated_flag)
 
@@ -295,9 +295,7 @@ def filtered_paths(
         src_thr: Minimum source count per edge (inclusive).
     """
 
-    view = nx.subgraph_view(
-        G, filter_edge=lambda u, v: edge_ok(G, u, v, thr=thr, src_thr=src_thr)
-    )
+    view = nx.subgraph_view(G, filter_edge=lambda u, v: edge_ok(G, u, v, thr=thr, src_thr=src_thr))
     # works for Graph/DiGraph/Multi(Di)Graph (paths are node sequences)
     yield from nx.all_simple_paths(view, source, target, cutoff=cutoff)
 
@@ -317,6 +315,7 @@ def _bfs_all_dists_forward(
     ``excluded`` are not traversed into, so paths cannot route through them.
     """
     from collections import deque
+
     excluded = excluded or set()
     dists: dict = {source: {0}}
     q = deque([(source, 0)])
@@ -352,6 +351,7 @@ def _bfs_all_dists_backward(
     paths cannot route through them.
     """
     from collections import deque
+
     excluded = excluded or set()
     dists: dict = {target: {0}}
     q = deque([(target, 0)])
@@ -371,13 +371,15 @@ def _bfs_all_dists_backward(
                     q.append((u, nd))
     return dists
 
-def query_drug_targets(graph: nx.DiGraph,
-                       drug: str,
-                       target_ev_filter: int = 1,
-                       target_src_filter: int = 1,
-                       target_curated_filter: bool = False,
-                       source_filter: Optional[List[str]] = None) -> pd.DataFrame:
 
+def query_drug_targets(
+    graph: nx.DiGraph,
+    drug: str,
+    target_ev_filter: int = 1,
+    target_src_filter: int = 1,
+    target_curated_filter: bool = False,
+    source_filter: Optional[List[str]] = None,
+) -> pd.DataFrame:
     """
     Query drug targets from a directed graph and return aggregated evidence data.
     This function retrieves all direct targets of a given drug from a NetworkX directed graph,
@@ -438,7 +440,11 @@ def query_drug_targets(graph: nx.DiGraph,
                 if isinstance(sc, dict):
                     all_sources.update(sc.keys())
             src = len(all_sources)
-        if ev >= target_ev_filter and src >= target_src_filter and (not target_curated_filter or curated):
+        if (
+            ev >= target_ev_filter
+            and src >= target_src_filter
+            and (not target_curated_filter or curated)
+        ):
             edges_list.append(
                 (
                     drug,
@@ -448,22 +454,17 @@ def query_drug_targets(graph: nx.DiGraph,
                     curated,
                 )
             )
-    
+
     result_df = pd.DataFrame(
-        edges_list, columns=["source", "target", "evidence_count", 
-                             "source_count", "curated"]
+        edges_list, columns=["source", "target", "evidence_count", "source_count", "curated"]
     )
-    result_df = result_df.groupby(["source", "target", "curated"], 
-                                  as_index=False).agg(
+    result_df = result_df.groupby(["source", "target", "curated"], as_index=False).agg(
         {"evidence_count": "sum", "source_count": "sum"}
     )
     return result_df
 
-def query_effect_nodes(
-    graph: nx.DiGraph,
-    effect: str,
-    target_ev_filter: int = 1) -> pd.DataFrame:
-    
+
+def query_effect_nodes(graph: nx.DiGraph, effect: str, target_ev_filter: int = 1) -> pd.DataFrame:
     """
     Query effect nodes from a directed graph and return aggregated evidence data.
     This function retrieves all direct predecessors of a given effect node from a NetworkX directed graph,
@@ -497,9 +498,7 @@ def query_effect_nodes(
         edge = graph[predecessor][effect]
         statements = edge.get("statements", [])
         ev = sum(stmt.get("evidence_count", 0) for stmt in statements)
-        src = sum(
-            sum(stmt.get("source_counts", {}).values()) for stmt in statements
-        )
+        src = sum(sum(stmt.get("source_counts", {}).values()) for stmt in statements)
         stmt_types = [stmt.get("stmt_type") for stmt in statements if stmt.get("stmt_type")]
 
         if ev >= target_ev_filter:
@@ -517,7 +516,7 @@ def query_effect_nodes(
         }
     )
     return result_df
-    
+
 
 def query_forward_paths(
     graph: nx.DiGraph,
@@ -526,6 +525,7 @@ def query_forward_paths(
     n_mediators: int = 1,
     med_ev_filter: Optional[List[int]] = None,
     med_src_filter: Optional[List[int]] = None,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """Search for simple forward paths from any start node to any end node.
 
@@ -580,7 +580,8 @@ def query_forward_paths(
 
     for start in tqdm(start_nodes_list, desc="Processing start nodes"):
         if start not in graph.nodes:
-            print(f"Start node '{start}' is missing from graph. Skipping.")
+            if verbose:
+                print(f"Start node '{start}' is missing from graph. Skipping.")
             continue
 
         for end in end_nodes_list:
@@ -591,12 +592,8 @@ def query_forward_paths(
                 thr = med_ev_filter[med]
                 src_thr = med_src_filter[med]
 
-                fwd = _bfs_all_dists_forward(
-                    graph, start, cutoff, thr, src_thr, excluded=excluded
-                )
-                bwd = _bfs_all_dists_backward(
-                    graph, end, cutoff, thr, src_thr, excluded=excluded
-                )
+                fwd = _bfs_all_dists_forward(graph, start, cutoff, thr, src_thr, excluded=excluded)
+                bwd = _bfs_all_dists_backward(graph, end, cutoff, thr, src_thr, excluded=excluded)
 
                 for u, v, edata in graph.edges(data=True):
                     if u == v:
@@ -607,95 +604,16 @@ def query_forward_paths(
                         continue
                     if not edge_ok(graph, u, v, thr, src_thr):
                         continue
-                    if any(
-                        d1 + 1 + d2 == cutoff
-                        for d1 in fwd[u]
-                        for d2 in bwd[v]
-                    ):
+                    if any(d1 + 1 + d2 == cutoff for d1 in fwd[u] for d2 in bwd[v]):
                         seen_edges.add((u, v))
                         ev = edata["evidence"]
                         forward_edge_list.append(
-                            (u, v,
-                             ev["total_evidence"],
-                             ev["source_evidence"],
-                             ev["stmt_type"])
+                            (u, v, ev["total_evidence"], ev["source_evidence"], ev["stmt_type"])
                         )
 
     forward_df = pd.DataFrame(
-        forward_edge_list, columns=["source", "target", "evidence_count", 
-                                    "source_count", "stmt_type"]
+        forward_edge_list,
+        columns=["source", "target", "evidence_count", "source_count", "stmt_type"],
     )
 
     return forward_df
-
-
-def main():
-    from indra.databases import uniprot_client, hgnc_client
-
-    def uniprot_to_hgnc_name(uniprot_mnemonic):
-        """Get an HGNC ID from a UniProt mnemonic."""
-        uniprot_id = uniprot_client.get_id_from_mnemonic(uniprot_mnemonic)
-        if uniprot_id:
-            return uniprot_client.get_gene_name(uniprot_id)
-        else:
-            return None
-    def prepare_data(input_data: pd.DataFrame, drug_name: list[str], missing_threshold: float = 0.5) -> pd.DataFrame:
-        """Prepare input data for graph estimation."""
-        try:
-            input_data = input_data.copy()
-            input_data["Protein"] = input_data["Protein"].apply(uniprot_to_hgnc_name)
-            input_data = input_data.drop_duplicates(subset=["Protein", "SUBJECT"])
-            input_data = input_data.loc[input_data["Protein"].notnull()]
-            # pattern = "|".join(re.escape(d) for d in drug_name)
-
-            # input_data = input_data.loc[
-            #     ~input_data["GROUP"].str.contains(pattern, na=False, case=False, regex=True)
-            # ]
-            input_data = input_data.pivot(index="SUBJECT", columns="Protein", values="LogIntensities")
-            missing_percentage = input_data.isnull().mean()
-            # input_data = input_data.loc[:, missing_percentage[missing_percentage < missing_threshold].index]
-            
-            return input_data
-        
-        except Exception as exc:
-            raise RuntimeError(f"Failed while preparing data for drug '{drug_name}': {exc}") from exc
-        
-    file = '//mnt//c//Users//devon//Downloads//indranet_dir_graph_fix_corr_weights.pkl'
-    import pickle
-
-    import numpy as np
-    _orig_dtype = np.dtype
-    
-    def _patched_dtype(x, *args, **kwargs):
-        # pickle asks for np.dtype("f16"); map it to a real dtype object
-        if x == "f16":
-            try:
-                x = np.longdouble  # prefer the intended meaning
-            except Exception:
-                x = "float64"      # last-resort fallback
-        return _orig_dtype(x, *args, **kwargs)
-
-    np.dtype = _patched_dtype
-    
-    # Replace 'file_path.pkl' with your actual file path
-    with open(file, "rb") as f:
-        graph = pickle.load(f)
-
-    np.dtype = _orig_dtype
-
-    data = pd.read_csv("/mnt/f/OneDrive - Northeastern University/Northeastern/Research/Causal_Inference/MS_causal_inference/benchmarks/data/protein/protein_data.csv")
-    input_data = prepare_data(data, ["troglitazone"])
-    input_names = list(input_data.columns)
-    input_names.append("Chemical and Drug Induced Liver Injury")
-
-    filtered_graph = prepare_graph(graph, input_names, 
-                            ["HGNC", "MESH", "CHEBI"], 
-                            ["gene_disease_association", "Inhibition", 
-                                "DecreaseAmount", "Activation", "IncreaseAmount"])
-    dili_targets = query_effect_nodes(
-        filtered_graph,
-        "Chemical and Drug Induced Liver Injury",
-        target_ev_filter = 1)
-
-if __name__ == "__main__":
-    main()

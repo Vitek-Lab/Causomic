@@ -84,7 +84,10 @@ def parse_protein_name(
 
 
 def prep_msstats_data(
-    data: pd.DataFrame, parse_gene: bool = False, gene_map: Optional[pd.DataFrame] = None
+    data: pd.DataFrame,
+    parse_gene: bool = False,
+    gene_map: Optional[pd.DataFrame] = None,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Prepare MSstats data for correlation analysis by formatting and reshaping.
@@ -139,10 +142,11 @@ def prep_msstats_data(
     # Check for duplicate entries before pivoting
     duplicates = pivot_data.duplicated(subset=["Protein", "originalRUN"])
     if duplicates.any():
-        print(
-            f"WARNING: Found {duplicates.sum()} duplicate Protein-Run combinations. "
-            "Taking mean values."
-        )
+        if verbose:
+            print(
+                f"WARNING: Found {duplicates.sum()} duplicate Protein-Run combinations. "
+                "Taking mean values."
+            )
         pivot_data = (
             pivot_data.groupby(["Protein", "originalRUN"])["LogIntensities"].mean().reset_index()
         )
@@ -162,7 +166,10 @@ def prep_msstats_data(
 
 
 def gen_correlation_matrix(
-    data: pd.DataFrame, methods: List[str] = ["pearson", "spearman"], abs_corr: bool = True
+    data: pd.DataFrame,
+    methods: List[str] = ["pearson", "spearman"],
+    abs_corr: bool = True,
+    verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """
     Generate correlation matrices using multiple correlation methods.
@@ -213,7 +220,8 @@ def gen_correlation_matrix(
     correlations = {}
 
     for method in methods:
-        print(f"Computing {method} correlation matrix...")
+        if verbose:
+            print(f"Computing {method} correlation matrix...")
 
         # Calculate correlation matrix
         corr_matrix = data.corr(method=method)
@@ -241,7 +249,8 @@ def gen_correlation_matrix(
             corr_long.loc[:, "value"] = np.abs(corr_long.loc[:, "value"])
 
         correlations[method] = corr_long
-        print(f"  Generated {len(corr_long)} protein pair correlations")
+        if verbose:
+            print(f"  Generated {len(corr_long)} protein pair correlations")
 
     return correlations
 
@@ -255,6 +264,7 @@ def test_gene_sets(
     comparison: Optional[str] = None,
     fc_pval: Optional[Literal["fc", "pval"]] = None,
     cutoff: Optional[float] = None,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Test gene sets for significant correlations between member genes.
@@ -341,7 +351,8 @@ def test_gene_sets(
     result_list = []
 
     for pathway_name in pathways:
-        print(f"Processing pathway: {pathway_name}")
+        if verbose:
+            print(f"Processing pathway: {pathway_name}")
 
         current_pathway = gene_sets[pathway_name]
         genes_in_pathway = current_pathway.get("geneSymbols", [])
@@ -593,77 +604,3 @@ def find_sets_with_gene(
                 matching_pathways.append(pathway_name)
 
     return matching_pathways
-
-
-def main() -> None:
-    """
-    Example usage and testing of the gene set analysis functions.
-
-    This function demonstrates a complete gene set analysis workflow using
-    MSstats data and regulatory pathways. It shows data preparation,
-    correlation analysis, and gene set testing with differential analysis.
-    """
-    try:
-        # Load and prepare MSstats data
-        print("Loading MSstats data...")
-        msstats_data = pd.read_csv("data/Talus/processed_data/ProteinLevelData.csv")
-
-        # Filter for specific experimental group
-        msstats_data = msstats_data[msstats_data["GROUP"] == "DMSO"]
-        print(f"Data shape after filtering: {msstats_data.shape}")
-
-        # Prepare data for correlation analysis
-        print("Preparing data for correlation analysis...")
-        prepared_data = prep_msstats_data(msstats_data, gene_map=None, parse_gene=True)
-        prepared_data = prepared_data.reset_index(drop=True)
-        prepared_data.columns.name = None
-        print(f"Prepared data shape: {prepared_data.shape}")
-        print(f"Number of proteins: {prepared_data.shape[1]}")
-
-        # Generate correlation matrices
-        print("Generating correlation matrices...")
-        correlation_data = gen_correlation_matrix(prepared_data, methods=["pearson"], abs_corr=True)
-        print("Correlation matrix generation completed")
-
-        # Load differential analysis results
-        print("Loading differential analysis results...")
-        differential_results = pd.read_csv("data/Talus/processed_data/model.csv")
-        differential_results = parse_protein_name(
-            differential_results, column_name="Protein", parse_gene=True
-        )
-
-        # Test regulatory pathways
-        print("Testing regulatory pathways...")
-        regulatory_results = test_gene_sets(
-            correlation_data,
-            list(prepared_data.columns),
-            "data/gene_sets/regulatory_pathways.json",
-            threshold=0.33,
-            differential_analysis=differential_results,
-            comparison="DMSO-DbET6",
-        )
-
-        # Display results
-        print("\nRegulatory pathway analysis results:")
-        print(regulatory_results)
-
-        # Show top pathways by correlation percentage
-        if len(regulatory_results) > 0:
-            top_pathways = regulatory_results.nlargest(5, "percent")
-            print(f"\nTop 5 pathways by correlation percentage:")
-            for _, row in top_pathways.iterrows():
-                print(
-                    f"  {row['pathway']}: {row['percent']:.3f} "
-                    f"({row['sig_corrs']}/{row['total_tests']} significant)"
-                )
-
-    except FileNotFoundError as e:
-        print(f"Error: Required data file not found - {e}")
-        print("Please ensure all data files are in the correct locations")
-    except Exception as e:
-        print(f"Error during analysis: {e}")
-        print("Please check your data format and file paths")
-
-
-if __name__ == "__main__":
-    main()

@@ -1,3 +1,10 @@
+"""Diagnostics for bootstrap structure-learning stability.
+
+Compares the sets of DAGs recovered from random initializations versus bootstrap
+resampling to assess how sensitive learned structure is to each source of
+variation.
+"""
+
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -29,11 +36,21 @@ def random_acyclic_subgraph(nodes, allowed_edges, inclusion_prob=0.15, rng=None)
     return dag
 
 
-def run_single_random_init(data, edge_priors, score_fn, estimator,
-                           expert_knowledge, allowed_edges, nodes,
-                           inclusion_prob, max_indegree, seed):
+def run_single_random_init(
+    data,
+    edge_priors,
+    score_fn,
+    estimator,
+    expert_knowledge,
+    allowed_edges,
+    nodes,
+    inclusion_prob,
+    max_indegree,
+    seed,
+):
     """Single Hill Climb run from a random initial DAG on the full dataset."""
     import logging
+
     logging.getLogger("pgmpy").setLevel(logging.WARNING)
 
     rng = np.random.default_rng(seed)
@@ -53,9 +70,16 @@ def run_single_random_init(data, edge_priors, score_fn, estimator,
     return estimated_dag
 
 
-def search_path_diagnostic(data, edge_priors, score_fn, estimator,
-                           expert_knowledge, K=50, inclusion_prob=0.15,
-                           max_indegree=5):
+def search_path_diagnostic(
+    data,
+    edge_priors,
+    score_fn,
+    estimator,
+    expert_knowledge,
+    K=50,
+    inclusion_prob=0.15,
+    max_indegree=5,
+):
     """
     Run K Hill Climb searches from random initializations on the SAME full dataset.
     Compare edge sets to diagnose search path dependence vs genuine signal.
@@ -65,9 +89,16 @@ def search_path_diagnostic(data, edge_priors, score_fn, estimator,
 
     dags = Parallel(n_jobs=-2)(
         delayed(run_single_random_init)(
-            data, edge_priors, score_fn, estimator,
-            expert_knowledge, allowed_edges, nodes,
-            inclusion_prob, max_indegree, seed=i
+            data,
+            edge_priors,
+            score_fn,
+            estimator,
+            expert_knowledge,
+            allowed_edges,
+            nodes,
+            inclusion_prob,
+            max_indegree,
+            seed=i,
         )
         for i in tqdm(range(K), desc="Random init runs")
     )
@@ -81,6 +112,7 @@ def compare_dag_sets(dags_random_init, dags_bootstrap, label_a="random_init", la
     Compare edge stability between two sets of DAGs.
     Returns a DataFrame with per-edge frequencies from each approach.
     """
+
     def edge_frequencies(dags):
         counts = Counter()
         for dag in dags:
@@ -94,12 +126,14 @@ def compare_dag_sets(dags_random_init, dags_bootstrap, label_a="random_init", la
     all_edges = set(freq_a.keys()) | set(freq_b.keys())
     rows = []
     for edge in sorted(all_edges):
-        rows.append({
-            "source": edge[0],
-            "target": edge[1],
-            f"freq_{label_a}": freq_a.get(edge, 0.0),
-            f"freq_{label_b}": freq_b.get(edge, 0.0),
-        })
+        rows.append(
+            {
+                "source": edge[0],
+                "target": edge[1],
+                f"freq_{label_a}": freq_a.get(edge, 0.0),
+                f"freq_{label_b}": freq_b.get(edge, 0.0),
+            }
+        )
 
     df = pd.DataFrame(rows)
     df["abs_diff"] = abs(df[f"freq_{label_a}"] - df[f"freq_{label_b}"])

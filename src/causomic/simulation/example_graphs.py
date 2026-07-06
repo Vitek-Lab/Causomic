@@ -666,32 +666,3 @@ def signaling_network(
         coef = None
 
     return {"Networkx": graph, "y0": y0_graph, "causomic": causomic_graph, "Coefficients": coef}
-
-
-def main() -> None:
-    med = mediator(n_med=3)
-    bd = backdoor()
-    fd = frontdoor()
-    sn = signaling_network()
-
-    simulated_fd_data = simulate_data(
-        sn["Networkx"],
-        coefficients=sn["Coefficients"],
-        mnar_missing_param=[-5, 0.4],
-        add_feature_var=True,
-        n=50,
-        seed=2,
-    )
-    fd_data = dataProcess(
-        simulated_fd_data["Feature_data"],
-        normalization=False,
-        summarization_method="TMP",
-        MBimpute=False,
-        sim_data=True,
-    )
-    # fd_data = fd_data.dropna(how="all",axis=1)
-    print(fd_data.isna().mean() * 100)
-
-
-if __name__ == "__main__":
-    main()

@@ -532,6 +532,7 @@ class AICGaussIndraPriors(LogLikelihoodGauss):
         #     prior_bonus *= np.log(self.data.shape[0])
         return aic_score + prior_bonus
 
+
 class AICGaussNoPriors(LogLikelihoodGauss):
 
     def __init__(
@@ -559,6 +560,7 @@ class AICGaussNoPriors(LogLikelihoodGauss):
         aic_score = ll - (df_model + 2)
 
         return aic_score
+
 
 class BICGaussIndraPriors(LogLikelihoodGauss):
     """
@@ -716,10 +718,11 @@ class BICGaussNoPriors(LogLikelihoodGauss):
         bic_score = ll - (((df_model + 2) / 2) * np.log(self.data.shape[0]))
 
         return bic_score
-    
+
+
 def random_acyclic_subgraph(nodes, allowed_edges, inclusion_prob=0.15, rng=None, max_indegree=2):
     """Generate a random DAG by greedily adding allowed edges without creating cycles.
-    
+
     Parameters
     ----------
     nodes : list
@@ -752,6 +755,7 @@ def random_acyclic_subgraph(nodes, allowed_edges, inclusion_prob=0.15, rng=None,
             dag.remove_edge(u, v)
 
     return dag
+
 
 def process_bootstrap(
     data: pd.DataFrame,
@@ -837,14 +841,12 @@ def process_bootstrap(
 
     allowed = set(edge_priors.keys())
     est = estimator(data=resampled_data, allowed_additions=allowed)
-    
+
     start_dag = None
     if random_init:
         nodes = list(resampled_data.columns)
-        start_dag = random_acyclic_subgraph(
-                nodes, allowed, 0.15, np.random.default_rng(seed)
-            )
-    
+        start_dag = random_acyclic_subgraph(nodes, allowed, 0.15, np.random.default_rng(seed))
+
     # Estimate the DAG using the custom scoring function
     estimated_dag = est.estimate(
         scoring_method=custom_score,
@@ -856,7 +858,10 @@ def process_bootstrap(
     )
     return estimated_dag
 
-def calculate_edge_probabilities(indra_priors: pd.DataFrame, count_col: str = "evidence_count") -> dict:
+
+def calculate_edge_probabilities(
+    indra_priors: pd.DataFrame, count_col: str = "evidence_count"
+) -> dict:
     """
     Calculate edge probabilities from INDRA evidence counts using power law modeling.
 
@@ -908,7 +913,7 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame, count_col: str = "e
     CDF transformation ensures that higher evidence counts receive higher
     probabilities while maintaining proper probability interpretation.
     """
-    
+
     edge_evidence = indra_priors[count_col].values.astype(int)
 
     xmin = edge_evidence.min()
@@ -937,9 +942,9 @@ def calculate_edge_probabilities(indra_priors: pd.DataFrame, count_col: str = "e
     return value_to_cdf
 
 
-def prepare_indra_priors(indra_priors: pd.DataFrame,
-                         convert_to_probability: bool,
-                         use_source_counts: bool = False) -> dict:
+def prepare_indra_priors(
+    indra_priors: pd.DataFrame, convert_to_probability: bool, use_source_counts: bool = False
+) -> dict:
     """
     Prepare INDRA prior data for causal discovery by converting to edge probabilities.
 
@@ -1018,7 +1023,7 @@ def prepare_indra_priors(indra_priors: pd.DataFrame,
 
     else:
         indra_priors["edge_p"] = indra_priors[count_col]
-        
+
     edge_probabilities = {
         (
             indra_priors.loc[i, "source"],
@@ -1031,7 +1036,11 @@ def prepare_indra_priors(indra_priors: pd.DataFrame,
 
 
 def remove_high_corr_edges_from_blacklist(
-    data: pd.DataFrame, indra_priors: pd.DataFrame, black_list: set, corr_threshold: float = 0.8
+    data: pd.DataFrame,
+    indra_priors: pd.DataFrame,
+    black_list: set,
+    corr_threshold: float = 0.8,
+    verbose: bool = True,
 ) -> set:
     """
     Remove edges between highly correlated variables from the blacklist.
@@ -1099,7 +1108,8 @@ def remove_high_corr_edges_from_blacklist(
                 high_corr_pairs.add((i, j))
                 high_corr_pairs.add((j, i))  # Both directions
 
-    print(f"High correlation pairs (threshold={corr_threshold}): {len(high_corr_pairs)}")
+    if verbose:
+        print(f"High correlation pairs (threshold={corr_threshold}): {len(high_corr_pairs)}")
 
     # Remove highly correlated edges from blacklist
     updated_blacklist = set(edge for edge in black_list if edge not in high_corr_pairs)
@@ -1126,6 +1136,7 @@ def run_bootstrap(
     convert_to_probability: bool = True,
     use_source_counts: bool = False,
     random_init: bool = False,
+    verbose: bool = True,
 ) -> list:
     """
     Run parallel bootstrap analysis for robust causal discovery with INDRA priors.
@@ -1229,23 +1240,27 @@ def run_bootstrap(
     The choice depends on computational resources and required precision
     for downstream biological interpretation and hypothesis generation.
     """
-    print("INFO: Starting bootstrap causal discovery:")
+    if verbose:
+        print("INFO: Starting bootstrap causal discovery:")
     if add_high_corr_edges_to_priors:
-        print("INFO: Adding high-corr edges to priors:")
+        if verbose:
+            print("INFO: Adding high-corr edges to priors:")
         updated_indra_priors, updated_blacklist = remove_high_corr_edges_from_blacklist(
-            data, indra_priors, expert_knowledge.forbidden_edges, corr_threshold
+            data, indra_priors, expert_knowledge.forbidden_edges, corr_threshold, verbose=verbose
         )
         expert_knowledge.forbidden_edges = updated_blacklist
     else:
         updated_indra_priors = indra_priors
 
-    print("INFO: Calculating edge probabilities.")
+    if verbose:
+        print("INFO: Calculating edge probabilities.")
 
-    edge_probabilities = prepare_indra_priors(updated_indra_priors, 
-                                              convert_to_probability, 
-                                              use_source_counts)
+    edge_probabilities = prepare_indra_priors(
+        updated_indra_priors, convert_to_probability, use_source_counts
+    )
 
-    print("INFO: Running bootstrap.")
+    if verbose:
+        print("INFO: Running bootstrap.")
     bootstrap_dags = Parallel(n_jobs=-2)(
         delayed(process_bootstrap)(
             data,
@@ -1270,30 +1285,3 @@ def run_bootstrap(
     #     )
 
     return bootstrap_dags
-
-
-def main():
-
-    import pickle
-    import time
-
-    # with open("/Users/kohler.d/Library/CloudStorage/OneDrive-NortheasternUniversity/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
-    # with open("/mnt/f/OneDrive - Northeastern University/Northeastern/Research/Causal_Inference/AstraZeneca_project/case_studies/compounds/model_input.pkl", "rb") as f:
-    #     model_input = pickle.load(f)
-    
-    # model_input = list(model_input)
-    # model_input[3] = BICGaussIndraPriors
-    # model_input[1].rename(columns={"source_symbol": "source", "target_symbol": "target"}, inplace=True)
-    
-    # model_input.append(False)
-    # model_input = tuple(model_input)
-    # start_time = time.time()
-    # bootstrap_dags = run_bootstrap(*model_input, n_bootstrap=50)
-    # end_time = time.time()
-    # print(f"Time taken: {end_time - start_time} seconds")
-
-
-
-
-if __name__ == "__main__":
-    main()

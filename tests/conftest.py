@@ -1,6 +1,6 @@
+import importlib
 import os
 import sys
-import importlib
 
 # Ensure src/ is on sys.path so imports work during collection
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

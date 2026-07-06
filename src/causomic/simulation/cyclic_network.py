@@ -180,9 +180,7 @@ def generate_cyclic_graph(
             f"add_cycle_in_start={n_start_cycles} requires n_start >= {n_start_cycles}."
         )
     if n_end_cycles > n_end:
-        raise ValueError(
-            f"add_cycle_in_end={n_end_cycles} requires n_end >= {n_end_cycles}."
-        )
+        raise ValueError(f"add_cycle_in_end={n_end_cycles} requires n_end >= {n_end_cycles}.")
 
     if seed is not None:
         np.random.seed(seed)
@@ -302,8 +300,7 @@ def generate_cyclic_graph(
         node_roles["cycle_nodes"]["end"] = all_cy_nodes
 
     assert not nx.is_directed_acyclic_graph(graph), (
-        "generate_cyclic_graph produced a DAG — cycle injection failed. "
-        "This is a bug."
+        "generate_cyclic_graph produced a DAG — cycle injection failed. " "This is a bug."
     )
 
     return graph, node_roles
@@ -358,10 +355,7 @@ def _simulate_cycle_scc(
     # Initialise every cycle node at its intercept.  Because all n samples share
     # the same starting value, the mean-centred cycle contribution is exactly 0
     # in the first iteration — a clean, unbiased initialisation.
-    current = {
-        node: np.full(n, coefficients[node]["intercept"], dtype=float)
-        for node in members
-    }
+    current = {node: np.full(n, coefficients[node]["intercept"], dtype=float) for node in members}
     frozen = np.zeros(n, dtype=bool)
 
     for _ in range(max_iterations):
@@ -417,6 +411,7 @@ def simulate_cyclic_data(
     include_missing: bool = True,
     mar_missing_param: float = 0.05,
     mnar_missing_param: List[float] = [-3, 0.4],
+    verbose: bool = True,
 ) -> Dict[str, Any]:
     """
     Simulate data from a causal graph that may contain directed cycles.
@@ -493,7 +488,8 @@ def simulate_cyclic_data(
     # Condense graph into a DAG over SCCs for correct processing order.
     condensation = nx.condensation(graph)
 
-    print("simulating cyclic data...")
+    if verbose:
+        print("simulating cyclic data...")
     for scc_idx in nx.topological_sort(condensation):
         members: set = condensation.nodes[scc_idx]["members"]
 
@@ -503,26 +499,20 @@ def simulate_cyclic_data(
                 # Node has no SEM entry (e.g. added by generate_indra_data);
                 # skip so it doesn't block downstream nodes.
                 continue
-            data[node] = simulate_node(
-                data, coefficients[node], n, False, None, node
-            )
+            data[node] = simulate_node(data, coefficients[node], n, False, None, node)
         else:
-            _simulate_cycle_scc(
-                graph, members, data, coefficients, n, threshold, max_iterations
-            )
+            _simulate_cycle_scc(graph, members, data, coefficients, n, threshold, max_iterations)
 
     feature_level_data: Optional[pd.DataFrame] = None
     if add_feature_var:
-        print("adding feature level data...")
-        all_nodes = [
-            node
-            for node in graph.nodes()
-            if node in data and node != "Output"
-        ]
+        if verbose:
+            print("adding feature level data...")
+        all_nodes = [node for node in graph.nodes() if node in data and node != "Output"]
         feature_list = [generate_features(data[node], node) for node in all_nodes]
         feature_level_data = pd.concat(feature_list, ignore_index=True)
 
-        print("masking data...")
+        if verbose:
+            print("masking data...")
         if include_missing:
             feature_level_data = add_missing(
                 feature_level_data, mar_missing_param, mnar_missing_param
@@ -533,6 +523,7 @@ def simulate_cyclic_data(
         "Feature_data": feature_level_data,
         "Coefficients": coefficients,
     }
+
 
 def ground_truth_interventional_effect_cyclic(
     graph: nx.DiGraph,
@@ -591,8 +582,9 @@ def ground_truth_interventional_effect_cyclic(
 
     # Observational baseline: every node's expected value equals its intercept
     # because simulate_node mean-centers parent values.
-    baseline = {node: coefficients[node]["intercept"] for node in graph.nodes()
-                if node in coefficients}
+    baseline = {
+        node: coefficients[node]["intercept"] for node in graph.nodes() if node in coefficients
+    }
 
     # Apply do-operator: cut all incoming edges to intervened nodes.
     modified = graph.copy()
@@ -653,8 +645,9 @@ def ground_truth_interventional_effect_cyclic(
             for node in member_list:
                 delta[node] = delta_vec[idx[node]]
 
-    interventional = {node: baseline[node] + delta.get(node, 0.0)
-                      for node in graph.nodes() if node in baseline}
+    interventional = {
+        node: baseline[node] + delta.get(node, 0.0) for node in graph.nodes() if node in baseline
+    }
     effect = {node: interventional[node] - baseline[node] for node in output_nodes}
 
     return {"baseline": baseline, "interventional": interventional, "effect": effect}

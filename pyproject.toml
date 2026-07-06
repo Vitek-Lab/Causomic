@@ -8,7 +8,8 @@ name = "causomic"
 version = "0.0.1-dev"
 description = "Python code for causal modeling of proteomics data."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = "==3.11.*"
+license = { text = "MIT" }
+requires-python = ">=3.10,<3.12"
 
 authors = [
 	{ name = "Devon Kohler", email = "kohler.d@northeastern.edu" },
@@ -41,16 +42,26 @@ dependencies = [
 	"namedlist",
 	"py3compat",
 	"python-dotenv",
+	"gseapy",
 ]
 
 [project.urls]
-Homepage = "https://github.com/devonjkohler/CausOmic"
-"Bug Tracker" = "https://github.com/devonjkohler/CausOmic/issues"
-"Source Code" = "https://github.com/devonjkohler/CausOmic"
+Homepage = "https://github.com/Vitek-Lab/Causomic"
+"Bug Tracker" = "https://github.com/Vitek-Lab/Causomic/issues"
+"Source Code" = "https://github.com/Vitek-Lab/Causomic"
 
 [project.optional-dependencies]
 notears = [
 	"notears @ git+https://github.com/xunzheng/notears.git",
+]
+test = [
+	"pytest>=7",
+	"pytest-cov",
+]
+dev = [
+	"causomic[test]",
+	"black",
+	"isort",
 ]
 
 [tool.setuptools]
@@ -61,9 +72,14 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["src"]
+
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310"]
+target-version = ["py310", "py311"]
 
 [tool.isort]
 profile = "black"

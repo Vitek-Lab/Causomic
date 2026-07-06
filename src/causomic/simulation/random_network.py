@@ -1,3 +1,10 @@
+"""Procedural generation of random and structured causal DAGs.
+
+Generates random/structured ground-truth DAGs, simulates INDRA-style prior
+networks with controllable misspecification, and runs end-to-end graph-recovery
+simulations comparing causomic against baselines (PC, hill-climbing, NOTEARS).
+"""
+
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -9,7 +16,7 @@ from causomic.simulation.proteomics_simulator import simulate_data
 from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     AICGaussIndraPriors,
-    SparseHillClimb
+    SparseHillClimb,
 )
 from causomic.network import estimate_posterior_dag
 import seaborn as sns
@@ -22,6 +29,7 @@ import os
 import traceback
 import secrets
 import random as _random
+
 
 def generate_random_dag(num_nodes, sparsity_factor):
     """
@@ -40,7 +48,9 @@ def generate_random_dag(num_nodes, sparsity_factor):
         A random DAG.
     """
     dag = nx.DiGraph()
-    node_names = [f"{chr(65 + i)}{i}" for i in range(num_nodes)]  # Generate node names as letters (A, B, C, ...)
+    node_names = [
+        f"{chr(65 + i)}{i}" for i in range(num_nodes)
+    ]  # Generate node names as letters (A, B, C, ...)
     dag.add_nodes_from(node_names)
 
     for i in range(num_nodes):
@@ -215,9 +225,9 @@ def generate_structured_dag(
             dst = end_nodes[int(rng.integers(len(end_nodes)))]
             dag.add_edge(snode, dst)
 
-    assert nx.is_directed_acyclic_graph(dag), (
-        "generate_structured_dag produced a cyclic graph — this is a bug."
-    )
+    assert nx.is_directed_acyclic_graph(
+        dag
+    ), "generate_structured_dag produced a cyclic graph — this is a bug."
 
     node_roles = {
         "start": start_nodes,
@@ -395,7 +405,7 @@ def generate_indra_data(
     # Identify edges that lie on at least one source-to-sink path so that
     # on-path spurious nodes can be inserted between real path nodes.
     sources = [n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0]
-    sinks   = [n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0]
+    sinks = [n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0]
 
     forward_reachable: set = set()
     for s in sources:
@@ -407,7 +417,8 @@ def generate_indra_data(
         backward_reachable.update(nx.descendants(reversed_dag, t) | {t})
 
     path_edges = [
-        (u, v) for u, v in ground_truth_dag.edges()
+        (u, v)
+        for u, v in ground_truth_dag.edges()
         if u in forward_reachable and v in backward_reachable
     ]
 
@@ -439,11 +450,11 @@ def generate_indra_data(
     for _ in range(num_incorrect_edges):
         if preferential_attachment:
             out_deg = np.array([modified_dag.out_degree(n) for n in existing_nodes], dtype=float)
-            in_deg  = np.array([modified_dag.in_degree(n)  for n in existing_nodes], dtype=float)
+            in_deg = np.array([modified_dag.in_degree(n) for n in existing_nodes], dtype=float)
             out_deg += 1.0
-            in_deg  += 1.0
+            in_deg += 1.0
             src = np.random.choice(existing_nodes, p=out_deg / out_deg.sum())
-            dst = np.random.choice(existing_nodes, p=in_deg  / in_deg.sum())
+            dst = np.random.choice(existing_nodes, p=in_deg / in_deg.sum())
         else:
             src = np.random.choice(existing_nodes)
             dst = np.random.choice(existing_nodes)
@@ -475,14 +486,16 @@ def generate_indra_data(
     # Boost edges go only to mediator/spurious nodes to avoid inflating end-node in-degree.
     if start_node_out_mu is not None and start_node_out_mu > 0:
         gt_sources = {n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0}
-        gt_sinks   = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
-        boost_targets = [n for n in modified_dag.nodes()
-                         if n not in gt_sources and n not in gt_sinks]
+        gt_sinks = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
+        boost_targets = [
+            n for n in modified_dag.nodes() if n not in gt_sources and n not in gt_sinks
+        ]
         for snode in gt_sources:
             if snode not in modified_dag or not boost_targets:
                 continue
-            target_out = int(np.clip(
-                np.random.lognormal(start_node_out_mu, start_node_out_sigma), 1, 500))
+            target_out = int(
+                np.clip(np.random.lognormal(start_node_out_mu, start_node_out_sigma), 1, 500)
+            )
             n_add = target_out - modified_dag.out_degree(snode)
             if n_add <= 0:
                 continue
@@ -490,19 +503,21 @@ def generate_indra_data(
             if not candidates:
                 continue
             in_degs = np.array([modified_dag.in_degree(n) + 1.0 for n in candidates])
-            chosen  = np.random.choice(
-                len(candidates), size=min(n_add, len(candidates)),
-                replace=False, p=in_degs / in_degs.sum())
+            chosen = np.random.choice(
+                len(candidates),
+                size=min(n_add, len(candidates)),
+                replace=False,
+                p=in_degs / in_degs.sum(),
+            )
             for idx in chosen:
-                modified_dag.add_edge(snode, candidates[idx],
-                                      ground_truth=False)
+                modified_dag.add_edge(snode, candidates[idx], ground_truth=False)
 
     # Guarantee every GT source has ≥1 out-edge and every GT sink has ≥1 in-edge.
     # This can fail when p_missing_real drops all edges from a node.
     gt_sources = {n for n in ground_truth_dag.nodes() if ground_truth_dag.in_degree(n) == 0}
-    gt_sinks   = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
+    gt_sinks = {n for n in ground_truth_dag.nodes() if ground_truth_dag.out_degree(n) == 0}
     non_sources = [n for n in modified_dag.nodes() if n not in gt_sources]
-    non_sinks   = [n for n in modified_dag.nodes() if n not in gt_sinks]
+    non_sinks = [n for n in modified_dag.nodes() if n not in gt_sinks]
     for snode in gt_sources:
         if modified_dag.out_degree(snode) == 0 and non_sources:
             target = np.random.choice(non_sources)
@@ -526,20 +541,21 @@ def generate_indra_data(
         modified_dag.edges[u, v]["evidence_count"] = count
 
     edges_data = {
-        'source': [],
-        'target': [],
-        'ground_truth': [],
-        'evidence_count': [],
+        "source": [],
+        "target": [],
+        "ground_truth": [],
+        "evidence_count": [],
     }
     for u, v in modified_dag.edges():
-        edges_data['source'].append(u)
-        edges_data['target'].append(v)
-        edges_data['ground_truth'].append(modified_dag.edges[u, v]["ground_truth"])
-        edges_data['evidence_count'].append(modified_dag.edges[u, v]["evidence_count"])
+        edges_data["source"].append(u)
+        edges_data["target"].append(v)
+        edges_data["ground_truth"].append(modified_dag.edges[u, v]["ground_truth"])
+        edges_data["evidence_count"].append(modified_dag.edges[u, v]["evidence_count"])
 
     edges_df = pd.DataFrame(edges_data)
 
     return modified_dag, edges_df, missing_edges
+
 
 def indra_dag_to_evidence_graph(indra_dag: nx.DiGraph) -> nx.DiGraph:
     """
@@ -575,34 +591,40 @@ def indra_dag_to_evidence_graph(indra_dag: nx.DiGraph) -> nx.DiGraph:
     return g
 
 
-def run_graph_sim():
+def run_graph_sim(verbose: bool = True):
+
+    def _p(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
 
     # grab a CSPRNG seed (32-bit signed range) and apply it to numpy and python's random
     seed = secrets.randbelow(2**31 - 1)
     np.random.seed(seed)
     _random.seed(seed)
 
-    print(f"Using random seed: {seed}")
+    _p(f"Using random seed: {seed}")
 
-    print("Generating random DAG...")
+    _p("Generating random DAG...")
     num_nodes = 10
-    gt_dag = generate_random_dag(num_nodes, .2)
-    
+    gt_dag = generate_random_dag(num_nodes, 0.2)
+
     # pos = nx.spring_layout(gt_dag)
     # nx.draw(gt_dag, pos, with_labels=True, node_color='lightblue', node_size=500, arrowsize=20)
     # plt.title("Random DAG Visualization")
     # plt.show()
-    # print("Generated DAG edges:")
-    # print(gt_dag.edges())
+    # _p("Generated DAG edges:")
+    # _p(gt_dag.edges())
 
-    print("Generating fake INDRA data...")
-    indra_nx, indra_data, _ = generate_indra_data(gt_dag, num_incorrect_nodes=10, num_incorrect_edges=100)
+    _p("Generating fake INDRA data...")
+    indra_nx, indra_data, _ = generate_indra_data(
+        gt_dag, num_incorrect_nodes=10, num_incorrect_edges=100
+    )
     # pos = nx.spring_layout(indra_nx)
     # nx.draw(indra_nx, pos, with_labels=True, node_color='lightblue', node_size=500, arrowsize=20)
     # plt.title("Random DAG Visualization")
     # plt.show()
-    # print("\nINDRa-compatible data:")
-    # print(indra_data)
+    # _p("\nINDRa-compatible data:")
+    # _p(indra_data)
 
     # plt.figure(figsize=(8, 6))
     # sns.kdeplot(
@@ -620,9 +642,8 @@ def run_graph_sim():
     # plt.legend(title="ground_truth")
     # plt.tight_layout()
     # plt.show()
-    
-    
-    print("Simulating proteomics data...")
+
+    _p("Simulating proteomics data...")
     n_obs = 100
     sim_data = simulate_data(
         graph=gt_dag,
@@ -636,117 +657,85 @@ def run_graph_sim():
     all_nodes = list(indra_nx.nodes())
     for i in range(len(all_nodes)):
         if all_nodes[i] not in protein_data.keys():
-            protein_data[all_nodes[i]] = np.random.normal(np.random.uniform(5,20), np.random.uniform(.5,3), size=n_obs)
-    
+            protein_data[all_nodes[i]] = np.random.normal(
+                np.random.uniform(5, 20), np.random.uniform(0.5, 3), size=n_obs
+            )
+
     final_sim_data = pd.DataFrame(protein_data)
 
-    print("Estimating posterior network...")
+    _p("Estimating posterior network...")
     posterior_network = estimate_posterior_dag(
-        final_sim_data, indra_priors=indra_data, 
-        prior_strength=5, 
-        scoring_function=BICGaussIndraPriors, 
-        search_algorithm=SparseHillClimb, 
-        n_bootstrap=200, 
-        add_high_corr_edges_to_priors=False, 
-        corr_threshold=0.9, edge_probability=0.5,
-        convert_to_probability=False
+        final_sim_data,
+        indra_priors=indra_data,
+        prior_strength=5,
+        scoring_function=BICGaussIndraPriors,
+        search_algorithm=SparseHillClimb,
+        n_bootstrap=200,
+        add_high_corr_edges_to_priors=False,
+        corr_threshold=0.9,
+        edge_probability=0.5,
+        convert_to_probability=False,
     )
 
-    print("Evaluating network performance...")
+    _p("Evaluating network performance...")
     result = nx.to_pandas_edgelist(posterior_network.directed)
     result["source"] = result["source"].astype(str)
     result["target"] = result["target"].astype(str)
     result.loc[:, "pred"] = True
-    result = result.merge(indra_data, on=['source', 'target'], how='outer')
+    result = result.merge(indra_data, on=["source", "target"], how="outer")
     result["pred"] = result["pred"].fillna(False)
 
-    print("Recall:", round(recall_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    print("Precision:", round(precision_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    
-    causomic_recall = recall_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    causomic_precision = precision_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    
-    pc_results = fit_pc(final_sim_data)    
-    print("Evaluating PC performance...")
+    _p("Recall:", round(recall_score(result["ground_truth"], result["pred"]), 2))
+    _p("Precision:", round(precision_score(result["ground_truth"], result["pred"]), 2))
+
+    causomic_recall = recall_score(result["ground_truth"], result["pred"])
+    causomic_precision = precision_score(result["ground_truth"], result["pred"])
+
+    pc_results = fit_pc(final_sim_data)
+    _p("Evaluating PC performance...")
     result = nx.to_pandas_edgelist(pc_results[0])
     result["source"] = result["source"].astype(str)
     result["target"] = result["target"].astype(str)
     result.loc[:, "pred"] = True
-    result = result.merge(indra_data, on=['source', 'target'], how='outer')
+    result = result.merge(indra_data, on=["source", "target"], how="outer")
     result["pred"] = result["pred"].fillna(False)
     result["ground_truth"] = result["ground_truth"].fillna(False)
 
-    # print("Accuracy:", round(accuracy_score(
+    # _p("Accuracy:", round(accuracy_score(
     #     result["ground_truth"],
     #     result["pred"]
     # ), 2))
-    print("Recall:", round(recall_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    print("Precision:", round(precision_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    
-    pc_recall = recall_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    pc_precision = precision_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    
+    _p("Recall:", round(recall_score(result["ground_truth"], result["pred"]), 2))
+    _p("Precision:", round(precision_score(result["ground_truth"], result["pred"]), 2))
+
+    pc_recall = recall_score(result["ground_truth"], result["pred"])
+    pc_precision = precision_score(result["ground_truth"], result["pred"])
+
     mmhc_results = fit_hc(final_sim_data)
-    print("Evaluating MMHC performance...")
+    _p("Evaluating MMHC performance...")
     result = nx.to_pandas_edgelist(mmhc_results[0])
     result["source"] = result["source"].astype(str)
     result["target"] = result["target"].astype(str)
     result.loc[:, "pred"] = True
-    result = result.merge(indra_data, on=['source', 'target'], how='outer')
+    result = result.merge(indra_data, on=["source", "target"], how="outer")
     result["pred"] = result["pred"].fillna(False)
     result["ground_truth"] = result["ground_truth"].fillna(False)
 
-    # print("Accuracy:", round(accuracy_score(
+    # _p("Accuracy:", round(accuracy_score(
     #     result["ground_truth"],
     #     result["pred"]
     # ), 2))
-    print("Recall:", round(recall_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    print("Precision:", round(precision_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    
-    mmhc_recall = recall_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    mmhc_precision = precision_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    
+    _p("Recall:", round(recall_score(result["ground_truth"], result["pred"]), 2))
+    _p("Precision:", round(precision_score(result["ground_truth"], result["pred"]), 2))
+
+    mmhc_recall = recall_score(result["ground_truth"], result["pred"])
+    mmhc_precision = precision_score(result["ground_truth"], result["pred"])
+
     # Plot scatterplots for each edge in the ground-truth DAG using final_sim_data
     # edges = [(u, v) for u, v in gt_dag.edges() if u in final_sim_data.columns and v in final_sim_data.columns]
 
     # if len(edges) == 0:
-    #     print("No matching columns in final_sim_data for edges in gt_dag.")
+    #     _p("No matching columns in final_sim_data for edges in gt_dag.")
     # else:
     #     n = len(edges)
     #     ncols = 3
@@ -777,89 +766,35 @@ def run_graph_sim():
 
     #     plt.tight_layout()
     #     plt.show()
-    
+
     notears_results, notears_weights = fit_notears(final_sim_data)
-    
-    print("Evaluating notears performance...")
+
+    _p("Evaluating notears performance...")
     result = nx.to_pandas_edgelist(notears_results)
     result["source"] = result["source"].astype(str)
     result["target"] = result["target"].astype(str)
     result.loc[:, "pred"] = True
-    result = result.merge(indra_data, on=['source', 'target'], how='outer')
+    result = result.merge(indra_data, on=["source", "target"], how="outer")
     result["pred"] = result["pred"].fillna(False)
     result["ground_truth"] = result["ground_truth"].fillna(False)
 
-    # print("Accuracy:", round(accuracy_score(
+    # _p("Accuracy:", round(accuracy_score(
     #     result["ground_truth"],
     #     result["pred"]
     # ), 2))
-    print("Recall:", round(recall_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    print("Precision:", round(precision_score(
-        result["ground_truth"],
-        result["pred"]
-    ), 2))
-    
-    notears_recall = recall_score(
-        result["ground_truth"],
-        result["pred"]
+    _p("Recall:", round(recall_score(result["ground_truth"], result["pred"]), 2))
+    _p("Precision:", round(precision_score(result["ground_truth"], result["pred"]), 2))
+
+    notears_recall = recall_score(result["ground_truth"], result["pred"])
+    notears_precision = precision_score(result["ground_truth"], result["pred"])
+
+    return (
+        causomic_recall,
+        causomic_precision,
+        pc_recall,
+        pc_precision,
+        mmhc_recall,
+        mmhc_precision,
+        notears_recall,
+        notears_precision,
     )
-    notears_precision = precision_score(
-        result["ground_truth"],
-        result["pred"]
-    )
-    
-    return causomic_recall, causomic_precision, pc_recall, pc_precision, mmhc_recall, mmhc_precision, notears_recall, notears_precision
-
-    
-if __name__ == "__main__":
-
-    n_runs = 10
-
-    results = []
-    for i in range(n_runs):
-        print(f"Starting run {i+1}/{n_runs}...")
-        t0 = time.time()
-        try:
-            causomic_recall, causomic_precision, pc_recall, pc_precision, mmhc_recall, mmhc_precision, notears_recall, notears_precision = run_graph_sim()
-            success = True
-            error = None
-        except Exception:
-            causomic_recall = causomic_precision = pc_recall = pc_precision = mmhc_recall = mmhc_precision = notears_recall = notears_precision = None
-            success = False
-            error = traceback.format_exc()
-
-        duration = time.time() - t0
-        results.append({
-            "run": i,
-            "causomic_recall": causomic_recall,
-            "causomic_precision": causomic_precision,
-            "pc_recall": pc_recall,
-            "pc_precision": pc_precision,
-            "mmhc_recall": mmhc_recall,
-            "mmhc_precision": mmhc_precision,
-            "notears_recall": notears_recall,
-            "notears_precision": notears_precision,
-            "success": success,
-            "error": error,
-            "duration_s": duration,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        })
-
-        print(f"Finished run {i+1}/{n_runs} - success={success} - duration={duration:.2f}s")
-
-    df = pd.DataFrame(results)
-
-    out_dir = os.getcwd()
-    csv_path = os.path.join(out_dir, "run_graph_sim_results.csv")
-    pkl_path = os.path.join(out_dir, "run_graph_sim_results.pkl")
-
-    df.to_csv(csv_path, index=False)
-    df.to_pickle(pkl_path)
-
-    print(f"Saved {len(df)} runs to {csv_path} and {pkl_path}")
-    print(df[["causomic_recall", "causomic_precision", "notears_recall", 
-              "notears_precision", "pc_recall", "pc_precision", "mmhc_recall", "mmhc_precision"
-              ]].describe(include="all"))

@@ -15,9 +15,29 @@ def make_sample_graph():
         G.add_node(n, ns="HGNC")
 
     # edges with statements list (dicts)
-    G.add_edge("n1", "n2", statements=[{"stmt_type": "IncreaseAmount", "evidence_count": 2, "source_counts": {"SRC1": 1}}])
-    G.add_edge("n2", "n3", statements=[{"stmt_type": "DecreaseAmount", "evidence_count": 5, "source_counts": {"SRC1": 2, "SRC2": 1}}])
-    G.add_edge("n3", "n4", statements=[{"stmt_type": "OtherType", "evidence_count": None, "source_counts": {}}])
+    G.add_edge(
+        "n1",
+        "n2",
+        statements=[
+            {"stmt_type": "IncreaseAmount", "evidence_count": 2, "source_counts": {"SRC1": 1}}
+        ],
+    )
+    G.add_edge(
+        "n2",
+        "n3",
+        statements=[
+            {
+                "stmt_type": "DecreaseAmount",
+                "evidence_count": 5,
+                "source_counts": {"SRC1": 2, "SRC2": 1},
+            }
+        ],
+    )
+    G.add_edge(
+        "n3",
+        "n4",
+        statements=[{"stmt_type": "OtherType", "evidence_count": None, "source_counts": {}}],
+    )
 
     return G
 
@@ -68,10 +88,22 @@ def test_query_confounders_returns_dataframe():
     # attach evidence info first
     utils_nx.add_evidence_info(G)
     # create a common confounder node that points to n2 and n3
-    G.add_edge("c", "n2", statements=[{"stmt_type": "IncreaseAmount", "evidence_count": 3, "source_counts": {"S1": 1}}])
-    G.add_edge("c", "n3", statements=[{"stmt_type": "IncreaseAmount", "evidence_count": 4, "source_counts": {"S1": 1}}])
+    G.add_edge(
+        "c",
+        "n2",
+        statements=[
+            {"stmt_type": "IncreaseAmount", "evidence_count": 3, "source_counts": {"S1": 1}}
+        ],
+    )
+    G.add_edge(
+        "c",
+        "n3",
+        statements=[
+            {"stmt_type": "IncreaseAmount", "evidence_count": 4, "source_counts": {"S1": 1}}
+        ],
+    )
     utils_nx.add_evidence_info(G)
-    df = utils_nx.query_confounders(G, ["n2", "n3"]) 
+    df = utils_nx.query_confounders(G, ["n2", "n3"])
     assert isinstance(df, pd.DataFrame)
     # should contain rows for the confounder 'c'
     assert (df["source"] == "c").any()
@@ -79,26 +111,72 @@ def test_query_confounders_returns_dataframe():
 
 def test_filtered_paths_and_query_forward_paths():
     G = nx.DiGraph()
-    G.add_edges_from([
-        ("A", "B", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
-        ("B", "C", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
-    ])
+    G.add_edges_from(
+        [
+            (
+                "A",
+                "B",
+                {
+                    "evidence": {
+                        "total_evidence": 2,
+                        "source_evidence": 1,
+                        "stmt_type": ["IncreaseAmount"],
+                    }
+                },
+            ),
+            (
+                "B",
+                "C",
+                {
+                    "evidence": {
+                        "total_evidence": 2,
+                        "source_evidence": 1,
+                        "stmt_type": ["IncreaseAmount"],
+                    }
+                },
+            ),
+        ]
+    )
     # filtered_paths yields the path A->B->C
     paths = list(utils_nx.filtered_paths(G, "A", "C", cutoff=2, thr=1))
     assert any(path for path in paths if path[0] == "A" and path[-1] == "C")
 
     # query_forward_paths should return dataframe with the forward edges
-    fwd = utils_nx.query_forward_paths(G, start_nodes=["A"], end_nodes=["C"], n_mediators=2, med_ev_filter=[1, 1, 1])
+    fwd = utils_nx.query_forward_paths(
+        G, start_nodes=["A"], end_nodes=["C"], n_mediators=2, med_ev_filter=[1, 1, 1]
+    )
     assert isinstance(fwd, pd.DataFrame)
     assert set(["source", "target"]).issubset(fwd.columns)
 
 
 def test_query_forward_paths_counts_mediators_not_edges():
     G = nx.DiGraph()
-    G.add_edges_from([
-        ("A", "B", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
-        ("B", "C", {"evidence": {"total_evidence": 2, "source_evidence": 1}}),
-    ])
+    G.add_edges_from(
+        [
+            (
+                "A",
+                "B",
+                {
+                    "evidence": {
+                        "total_evidence": 2,
+                        "source_evidence": 1,
+                        "stmt_type": ["IncreaseAmount"],
+                    }
+                },
+            ),
+            (
+                "B",
+                "C",
+                {
+                    "evidence": {
+                        "total_evidence": 2,
+                        "source_evidence": 1,
+                        "stmt_type": ["IncreaseAmount"],
+                    }
+                },
+            ),
+        ]
+    )
 
     direct_only = utils_nx.query_forward_paths(
         G,
