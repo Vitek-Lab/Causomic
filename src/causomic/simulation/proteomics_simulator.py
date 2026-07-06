@@ -82,6 +82,7 @@ def simulate_data(
     add_feature_var: bool = True,
     n: int = 1000,
     seed: Optional[int] = None,
+    verbose: bool = True,
 ) -> Dict[str, Any]:
     """
     Simulate realistic proteomics data from causal graph structure.
@@ -203,7 +204,8 @@ def simulate_data(
 
     sorted_nodes = [i for i in nx.topological_sort(graph) if i != "cell_type"]
 
-    print("simulating data...")
+    if verbose:
+        print("simulating data...")
     for node in sorted_nodes:
         node_coefficients = coefficients[node]
         if node in intervention.keys():
@@ -211,8 +213,7 @@ def simulate_data(
         else:
             temp_int = None
 
-        data[node] = simulate_node(data, node_coefficients, 
-                                   n, cell_type, temp_int, node)
+        data[node] = simulate_node(data, node_coefficients, n, cell_type, temp_int, node)
 
     if cell_type:
         data["cell_type"] = np.repeat([i for i in range(n_cells)], n // n_cells)
@@ -229,7 +230,8 @@ def simulate_data(
 
     # break data into features
     if add_feature_var:
-        print("adding feature level data...")
+        if verbose:
+            print("adding feature level data...")
         feature_level_data_list = list()
         for node in sorted_nodes:
             if node != "Output":
@@ -237,7 +239,8 @@ def simulate_data(
 
         feature_level_data = pd.concat(feature_level_data_list, ignore_index=True)
 
-        print("masking data...")
+        if verbose:
+            print("masking data...")
         if include_missing:
             feature_level_data = add_missing(
                 feature_level_data, mar_missing_param, mnar_missing_param
@@ -381,7 +384,7 @@ def simulate_node(
     cell_type: bool,
     intervention: Optional[float],
     node_name: str,
-    ) -> np.ndarray:
+) -> np.ndarray:
     """
     Simulate data for a single node using its structural equation.
 
@@ -569,30 +572,26 @@ def generate_features(data: np.ndarray, node: str) -> pd.DataFrame:
     of causal discovery algorithms under conditions that mirror real
     mass spectrometry proteomics experiments.
     """
-    feature_level_data = pd.DataFrame(columns=["Protein", "Replicate", "Feature", "Intensity"])
-
     number_features = np.random.randint(15, 30)
-    feature_effects = [np.random.uniform(-0.75, 0.75) for _ in range(number_features)]
+    n_samples = len(data)
 
-    for i in range(len(data)):
-        for j in range(number_features):
+    feature_effects = np.random.uniform(-0.75, 0.75, size=number_features)
+    errors = np.random.normal(0, 0.1, size=(n_samples, number_features))
 
-            # Measurement error
-            error = np.random.normal(0, 0.1)
-            feature_level_data = pd.concat(
-                [
-                    feature_level_data,
-                    pd.DataFrame(
-                        {
-                            "Protein": [node],
-                            "Replicate": [i],
-                            "Feature": [j],
-                            "Intensity": [data[i] + feature_effects[j] + error],
-                        }
-                    ),
-                ],
-                ignore_index=True,
-            )
+    # data[:, None] broadcasts (n_samples,) × (number_features,) → (n_samples, number_features)
+    intensities = data[:, None] + feature_effects[None, :] + errors
+
+    replicates = np.repeat(np.arange(n_samples), number_features)
+    features = np.tile(np.arange(number_features), n_samples)
+
+    feature_level_data = pd.DataFrame(
+        {
+            "Protein": node,
+            "Replicate": replicates,
+            "Feature": features,
+            "Intensity": intensities.ravel(),
+        }
+    )
 
     return feature_level_data
 
@@ -927,98 +926,3 @@ def build_igf_network(cell_confounder: bool) -> nx.DiGraph:
         graph.add_edge("cell_type", "Erk")
 
     return graph
-
-
-def main() -> None:
-    """
-    Demonstration script for causomic simulation capabilities.
-
-    Provides example usage of the simulation framework, including data generation,
-    visualization, and basic analysis workflows. This function serves as both
-    a usage tutorial and validation test for the simulation components.
-
-    The demonstration includes:
-    1. Building realistic signaling networks
-    2. Generating simulated proteomics data with hierarchical structure
-    3. Creating diagnostic visualizations
-    4. Showing data preparation for causal analysis
-
-    Examples
-    --------
-    >>> # Run demonstration
-    >>> from causomic.simulation.simulation import main
-    >>> main()  # Will generate plots and print data summaries
-
-    Notes
-    -----
-    This function demonstrates several key workflows:
-
-    1. Network Construction:
-       - Uses predefined signaling network templates
-       - Shows how to specify realistic coefficient structures
-       - Demonstrates network properties and validation
-
-    2. Data Simulation:
-       - Multi-level data generation (protein + feature levels)
-       - Realistic missing data patterns
-       - Biologically motivated noise models
-
-    3. Quality Assessment:
-       - Profile plots for data visualization
-       - Statistical summaries of simulated data
-       - Diagnostic checks for simulation parameters
-
-    4. Workflow Integration:
-       - Preparation for causal discovery algorithms
-       - Data formatting for downstream analysis
-       - Integration with causomic modeling framework
-
-    The function uses predefined coefficient structures that reflect
-    realistic biological relationships in growth factor signaling,
-    making the simulated data suitable for algorithm benchmarking
-    and method development.
-
-    Expected Outputs:
-    - Console output with data summaries and network statistics
-    - Matplotlib plots showing protein expression profiles
-    - Demonstration of data structures and formats
-
-    This main function is particularly useful for:
-    - Learning causomic simulation workflow
-    - Validating installation and dependencies
-    - Understanding data formats and structures
-    - Testing custom network configurations
-    - Benchmarking algorithm performance
-    """
-
-    from causomic.simulation.example_graphs import signaling_network
-    from src.causomic.simulation.proteomics_simulator import simple_profile_plot
-
-    informative_prior_coefs = {
-        "EGF": {"intercept": 6.0, "error": 1},
-        "IGF": {"intercept": 5.0, "error": 1},
-        "SOS": {"intercept": 2, "error": 0.25, "EGF": 0.6, "IGF": 0.6},
-        "Ras": {"intercept": 3, "error": 0.25, "SOS": 0.5},
-        "PI3K": {"intercept": 0, "error": 0.25, "EGF": 0.5, "IGF": 0.5, "Ras": 0.5},
-        "Akt": {"intercept": 1.0, "error": 0.25, "PI3K": 0.75},
-        "Raf": {"intercept": 4, "error": 0.25, "Ras": 1.2, "Akt": -0.4},
-        "Mek": {"intercept": 2.0, "error": 0.25, "Raf": 0.75},
-        "Erk": {"intercept": -2, "error": 0.25, "Mek": 1.0},
-    }
-
-    fd = signaling_network(add_independent_nodes=False)
-    simulated_fd_data = simulate_data(
-        fd["Networkx"],
-        coefficients=informative_prior_coefs,
-        mnar_missing_param=[-3, 0.3],
-        add_feature_var=True,
-        n=25,
-        seed=3,
-    )
-
-    simple_profile_plot(simulated_fd_data["Feature_data"], "Mek")
-    plt.show()
-
-
-if __name__ == "__main__":
-    main()

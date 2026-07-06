@@ -210,7 +210,7 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
         "CHEBI": get_chebi_name_from_id,
         "MESH": get_mesh_name,
         "UP": get_gene_name,
-        "GO": get_go_label
+        "GO": get_go_label,
     }
 
     # Custom field mapping for different relation types
@@ -477,30 +477,10 @@ def pull_mesh_data(mesh_ids: List[str], client: Neo4jClient) -> pd.DataFrame:
     data = format_query_results(query_results)
     return data
 
+
 def pull_go_data(go_ids: List[str], client: Neo4jClient) -> pd.DataFrame:
 
     query_ids = [("GO", go_id) for go_id in go_ids]
     query_results = mesh_query(query_ids=query_ids, client=client)
     data = format_query_results(query_results)
     return data
-
-
-def main():
-    from indra_cogex.client import Neo4jClient
-
-    client = Neo4jClient(url=os.getenv("API_URL"), 
-                            auth=(os.getenv("USER"), 
-                                os.getenv("PASSWORD"))
-                        )
-    
-    trog_targets = ['SERPINE1', 'CYP3A4', 'CTNNB1', 'MAPK1']
-
-    dili_targets = ['ALB']
-
-    indra_prior = extract_indra_prior(
-        trog_targets, dili_targets, input_data_graph.columns, client,
-        one_step_evidence=1, two_step_evidence=1,
-        three_step_evidence=3, confounder_evidence=5000000)
-    
-if __name__ == "__main__":
-    main()
