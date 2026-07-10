@@ -24,7 +24,7 @@ First publicly packaged release, focused on publication readiness.
 - PyPI packaging metadata: trove `classifiers` and search `keywords`.
 
 ### Changed
-- Set the supported Python range to 3.11 only (`requires-python = ">=3.11,<3.12"`).
+- Set the supported Python range to 3.10–3.11 (`requires-python = ">=3.10,<3.12"`).
 - Refreshed the README to match the current package and point to the
   `user_manual.ipynb` vignette instead of inline quick-start code.
 - Pinned `black==25.9.0` and `isort==8.0.1` in CI and the `dev` extra so local
