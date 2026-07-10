@@ -60,8 +60,8 @@ test = [
 ]
 dev = [
 	"causomic[test]",
-	"black",
-	"isort",
+	"black==25.9.0",
+	"isort==8.0.1",
 ]
 
 [tool.setuptools]
