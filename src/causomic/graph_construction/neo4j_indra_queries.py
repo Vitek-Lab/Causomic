@@ -29,9 +29,9 @@ import indra_cogex
 import pandas as pd
 from dotenv import load_dotenv
 from indra.databases.chebi_client import get_chebi_id_from_name, get_chebi_name_from_id
+from indra.databases.go_client import get_go_label
 from indra.databases.hgnc_client import get_hgnc_id, get_hgnc_name
 from indra.databases.mesh_client import get_mesh_name
-from indra.databases.go_client import get_go_label
 from indra.databases.uniprot_client import get_gene_name
 from indra.statements import Statement
 from indra_cogex.client import Neo4jClient

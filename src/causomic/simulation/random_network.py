@@ -5,30 +5,29 @@ networks with controllable misspecification, and runs end-to-end graph-recovery
 simulations comparing causomic against baselines (PC, hill-climbing, NOTEARS).
 """
 
+import multiprocessing as mp
+import os
+import random as _random
+import secrets
+import time
+import traceback
+from typing import Optional
+
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-from typing import Optional
-import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, recall_score, precision_score
+import seaborn as sns
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 
-from causomic.simulation.proteomics_simulator import simulate_data
 from causomic.graph_construction.prior_data_reconciliation import (
-    BICGaussIndraPriors,
     AICGaussIndraPriors,
+    BICGaussIndraPriors,
     SparseHillClimb,
 )
 from causomic.network import estimate_posterior_dag
-import seaborn as sns
-
-from causomic.validation.network_comparison import fit_pc, fit_hc, fit_notears
-import multiprocessing as mp
-import time
-import pandas as pd
-import os
-import traceback
-import secrets
-import random as _random
+from causomic.simulation.proteomics_simulator import simulate_data
+from causomic.validation.network_comparison import fit_hc, fit_notears, fit_pc
 
 
 def generate_random_dag(num_nodes, sparsity_factor):

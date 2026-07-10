@@ -5,12 +5,13 @@ Wraps standard causal-discovery algorithms -- PC, hill-climbing (HC), and NOTEAR
 causomic-derived networks. NOTEARS support is optional (``causomic[notears]``).
 """
 
-import pandas as pd
-import numpy as np
+from typing import List, Optional, Tuple
+
 import networkx as nx
+import numpy as np
+import pandas as pd
 from pgmpy.estimators import PC, HillClimbSearch
 from sklearn.preprocessing import StandardScaler
-from typing import List, Optional, Tuple
 
 try:
     from notears.linear import notears_linear  # type: ignore[import-not-found]
