@@ -121,6 +121,8 @@ def test_generate_indra_data_preferential_and_shortcut_and_missing():
 def test_run_graph_sim_returns_metric_octuple():
     # Full recovery pipeline (causomic + PC + HC + NOTEARS). Self-seeded via
     # secrets, so we assert on structure/ranges rather than exact values.
+    # NOTEARS is an optional dependency (`causomic[notears]`); skip if absent.
+    pytest.importorskip("notears", reason="requires optional 'causomic[notears]' dependency")
     result = rn.run_graph_sim(verbose=False)
     assert isinstance(result, tuple)
     assert len(result) == 8

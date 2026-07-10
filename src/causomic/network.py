@@ -26,10 +26,10 @@ Dependencies:
     - causomic.graph_construction: Custom modules for prior data reconciliation and utilities
 """
 
-import os
 import copy
+import os
 from collections import Counter
-from typing import Set, Iterable
+from typing import Iterable, Set
 
 import networkx as nx
 import numpy as np
@@ -45,7 +45,10 @@ from y0.algorithm.falsification import get_graph_falsifications
 from y0.dsl import Variable
 from y0.graph import NxMixedGraph
 
-from causomic.graph_construction.neo4j_indra_queries import format_query_results, get_ids
+from causomic.graph_construction.neo4j_indra_queries import (
+    format_query_results,
+    get_ids,
+)
 from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     SparseHillClimb,
