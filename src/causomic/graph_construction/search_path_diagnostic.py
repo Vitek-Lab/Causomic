@@ -5,13 +5,14 @@ resampling to assess how sensitive learned structure is to each source of
 variation.
 """
 
+from collections import Counter
+
 import networkx as nx
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from pgmpy.base import DAG
 from pgmpy.estimators import ExpertKnowledge
-from collections import Counter
-from joblib import Parallel, delayed
 from tqdm import tqdm
 
 

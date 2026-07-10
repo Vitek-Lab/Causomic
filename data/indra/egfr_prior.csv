@@ -1,0 +1,17 @@
+source,target,evidence_count,stmt_type
+EGFR,AKT1,15,DecreaseAmount;IncreaseAmount
+EGFR,JUN,11,IncreaseAmount
+EGFR,KRAS,11,DecreaseAmount;IncreaseAmount
+EGFR,MAPK1,15,DecreaseAmount;IncreaseAmount
+EGFR,MAPK3,2,DecreaseAmount;IncreaseAmount
+EGFR,RAF1,2,DecreaseAmount
+EGFR,SHC1,1,IncreaseAmount
+MAP2K1,EGFR,1,IncreaseAmount
+MAP2K1,JUN,1,IncreaseAmount
+MAP2K1,MAPK1,5,DecreaseAmount;IncreaseAmount
+MAP2K1,MAPK3,8,DecreaseAmount;IncreaseAmount
+MAP2K1,RAF1,1,IncreaseAmount
+RAF1,JUN,2,DecreaseAmount;IncreaseAmount
+RAF1,MAP2K1,1,IncreaseAmount
+RAF1,MAPK1,1,DecreaseAmount
+RAF1,MAPK3,1,DecreaseAmount
