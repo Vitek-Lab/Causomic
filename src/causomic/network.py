@@ -34,7 +34,11 @@ from typing import Iterable, Set
 import networkx as nx
 import numpy as np
 import pandas as pd
-from indra_cogex.client import Neo4jClient
+
+try:
+    from indra_cogex.client import Neo4jClient
+except ImportError:  # optional dependency, see causomic._optional
+    from causomic._optional import missing_cogex as Neo4jClient
 
 # Parallel processing and progress tracking
 from joblib import Parallel, delayed

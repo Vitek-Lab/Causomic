@@ -64,10 +64,10 @@ The package is particularly useful for:
 - Normalization, summarization, and imputation utilities
 - Gene-set correlation and pathway over-representation analysis (ORA)
 
-### 🧪 **Simulation & Validation**
+### 🧪 **Simulation**
 - Generate example graphs exhibiting different causal structures
 - Simulate realistic proteomics data over causal graphs
-- Benchmark against baselines (PC, hill-climbing, NOTEARS) for method validation
+- Procedural DAG generation with INDRA-style misspecification for method development
 
 ## Installation
 
@@ -83,14 +83,17 @@ cd Causomic
 pip install -e .
 ```
 
-Some dependencies (INDRA and INDRA-CoGEx) are installed directly from GitHub; a
-network connection is required on first install.
-
 ### Optional dependencies
-- `notears` — continuous DAG structure learning, used by the validation
-  baselines: `pip install "causomic[notears]"`
 - `dev` — testing and linting tools (`pytest`, `black`, `isort`):
   `pip install -e ".[dev]"`
+- **INDRA-CoGEx** — required only for the Neo4j-backed CoGEx query features
+  (`causomic.network`, `causomic.graph_construction.utils_neo4j`, and
+  `neo4j_indra_queries`). It is not on PyPI; install it from source if you need
+  those features:
+  ```bash
+  pip install git+https://github.com/gyorilab/indra_cogex.git
+  ```
+  The rest of the package works without it.
 
 ## Getting Started
 
@@ -149,15 +152,13 @@ Synthetic graph and data generation for testing and method development.
 - `simulate_data`, `generate_coefficients`, `build_igf_network`
 - `generate_structured_dag`, `generate_indra_data`, `generate_cyclic_graph`
 
-### 🔬 **Validation** (`causomic.validation`)
-Benchmarking against baseline structure-learning algorithms.
-- `fit_pc`, `fit_hc`, `fit_notears` — baseline network learners
-- `run_benchmark` — end-to-end model-validation workflow
-
 ### 🚀 **High-Level Entry Points**
 - `causomic.network` — network estimation helpers (`extract_indra_prior`,
   `consensus_dag`, `estimate_posterior_dag`, `filter_to_causal_subgraph`, …)
 - `causomic.workflows` — packaged pipelines (`run_toxicity_detection_workflow`)
+
+  Some of these helpers query INDRA-CoGEx and require the optional
+  [INDRA-CoGEx install](#optional-dependencies).
 
 ## Documentation
 

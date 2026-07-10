@@ -24,10 +24,15 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from indra.databases.hgnc_client import get_hgnc_id, get_uniprot_id
 from indra.statements import Statement
 
-# INDRA imports
-from indra_cogex.client import Neo4jClient
-from indra_cogex.client.enrichment.utils import minimum_evidence_helper
-from indra_cogex.representation import norm_id
+# INDRA imports (indra-cogex is an optional dependency, see causomic._optional)
+try:
+    from indra_cogex.client import Neo4jClient
+    from indra_cogex.client.enrichment.utils import minimum_evidence_helper
+    from indra_cogex.representation import norm_id
+except ImportError:
+    from causomic._optional import missing_cogex
+
+    Neo4jClient = minimum_evidence_helper = norm_id = missing_cogex
 
 # Database client imports
 from protmapper import uniprot_client

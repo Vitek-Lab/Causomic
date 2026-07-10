@@ -10,7 +10,6 @@ import importlib
 
 import networkx as nx
 import numpy as np
-import pytest
 
 rn = importlib.import_module("causomic.simulation.random_network")
 eg = importlib.import_module("causomic.simulation.example_graphs")
@@ -113,19 +112,3 @@ def test_generate_indra_data_preferential_and_shortcut_and_missing():
     # missing_edges is a subset of the original ground-truth edges.
     for u, v in missing:
         assert gt_dag.has_edge(u, v)
-
-
-# --------------------------------------------------------------------------- #
-# run_graph_sim (end-to-end smoke test, lines 594-800)
-# --------------------------------------------------------------------------- #
-def test_run_graph_sim_returns_metric_octuple():
-    # Full recovery pipeline (causomic + PC + HC + NOTEARS). Self-seeded via
-    # secrets, so we assert on structure/ranges rather than exact values.
-    # NOTEARS is an optional dependency (`causomic[notears]`); skip if absent.
-    pytest.importorskip("notears", reason="requires optional 'causomic[notears]' dependency")
-    result = rn.run_graph_sim(verbose=False)
-    assert isinstance(result, tuple)
-    assert len(result) == 8
-    for metric in result:
-        val = float(metric)
-        assert 0.0 <= val <= 1.0
