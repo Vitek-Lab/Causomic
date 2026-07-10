@@ -24,7 +24,11 @@ First publicly packaged release, focused on publication readiness.
 - PyPI packaging metadata: trove `classifiers` and search `keywords`.
 
 ### Changed
-- Set the supported Python range to 3.10–3.11 (`requires-python = ">=3.10,<3.12"`).
+- Set the supported Python range to 3.11–3.12 (`requires-python = ">=3.11,<3.13"`).
+- Unpinned PyTorch from `2.0.1` to `>=2.3,<2.5`, which adds Python 3.12 support.
+  The upper cap is required because `torch>=2.5` pins `sympy==1.13.1`, conflicting
+  with `pysb`'s `sympy<1.12` (pulled in via `indra`); the same conflict blocks
+  Python 3.13 (which would need `torch>=2.5`).
 - Install `indra` from PyPI instead of a `git+` URL, so the package can be
   published to PyPI (no direct-URL dependencies remain).
 - Made `indra-cogex` an optional dependency: its imports are now guarded, so the

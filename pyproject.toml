@@ -9,7 +9,7 @@ version = "0.9.0"
 description = "Python code for causal modeling of proteomics data."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "MIT" }
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.13"
 
 authors = [
 	{ name = "Devon Kohler", email = "kohler.d@northeastern.edu" },
@@ -40,8 +40,8 @@ classifiers = [
 	"Natural Language :: English",
 	"Operating System :: OS Independent",
 	"Programming Language :: Python :: 3",
-	"Programming Language :: Python :: 3.10",
 	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
 	"Programming Language :: Python :: 3 :: Only",
 	"Topic :: Scientific/Engineering :: Bio-Informatics",
 	"Topic :: Scientific/Engineering :: Mathematics",
@@ -51,7 +51,10 @@ dependencies = [
 	"networkx",
 	"pandas",
 	"pyro-ppl==1.8.5",
-	"torch==2.0.1",
+	# torch is capped <2.5: torch>=2.5 pins sympy==1.13.1, which conflicts with
+	# pysb's sympy<1.12 (pysb is pulled in transitively via indra). torch<2.5
+	# provides wheels through Python 3.12 (3.13 would need torch>=2.5).
+	"torch>=2.3,<2.5",
 	"numpy<2",
 	"scipy",
 	"scikit-learn",
@@ -106,7 +109,7 @@ pythonpath = ["src"]
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311"]
+target-version = ["py311", "py312"]
 
 [tool.isort]
 profile = "black"
