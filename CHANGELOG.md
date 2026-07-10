@@ -24,7 +24,9 @@ First publicly packaged release, focused on publication readiness.
 - PyPI packaging metadata: trove `classifiers` and search `keywords`.
 
 ### Changed
-- Set the supported Python range to 3.10–3.11 (`requires-python = ">=3.10,<3.12"`).
+- Set the supported Python version to 3.11 (`requires-python = ">=3.11,<3.12"`).
+  3.10 is not supported because the only cleanly-installable `pysb` (1.17.0, the
+  sole version shipping a wheel; earlier sdists fail to build) requires 3.11.
 - Install `indra` from PyPI instead of a `git+` URL, so the package can be
   published to PyPI (no direct-URL dependencies remain).
 - Made `indra-cogex` an optional dependency: its imports are now guarded, so the
