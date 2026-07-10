@@ -22,9 +22,6 @@ import os
 from textwrap import dedent
 from typing import Dict, Iterable, List, Optional, Tuple
 
-# INDRA imports
-import indra_cogex
-
 # Third-party imports
 import pandas as pd
 from dotenv import load_dotenv
@@ -34,8 +31,16 @@ from indra.databases.hgnc_client import get_hgnc_id, get_hgnc_name
 from indra.databases.mesh_client import get_mesh_name
 from indra.databases.uniprot_client import get_gene_name
 from indra.statements import Statement
-from indra_cogex.client import Neo4jClient
-from indra_cogex.representation import norm_id
+
+# indra-cogex is an optional dependency (see causomic._optional)
+try:
+    from indra_cogex.client import Neo4jClient
+    from indra_cogex.representation import Relation, norm_id
+except ImportError:
+    from causomic._optional import missing_cogex
+
+    Neo4jClient = norm_id = missing_cogex
+    Relation = ()  # isinstance() fallback; always False, unreachable without cogex
 
 # Local imports
 from causomic.graph_construction.utils_neo4j import get_neighbor_network
@@ -221,7 +226,7 @@ def format_query_results(queries: List[Statement]) -> pd.DataFrame:
     for relation in queries:
         # Filter for supported relation types and namespaces
         if (
-            isinstance(relation, indra_cogex.representation.Relation)
+            isinstance(relation, Relation)
             and relation.source_ns in id_mapper
             and relation.target_ns in id_mapper
         ):

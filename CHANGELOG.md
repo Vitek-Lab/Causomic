@@ -25,6 +25,11 @@ First publicly packaged release, focused on publication readiness.
 
 ### Changed
 - Set the supported Python range to 3.10–3.11 (`requires-python = ">=3.10,<3.12"`).
+- Install `indra` from PyPI instead of a `git+` URL, so the package can be
+  published to PyPI (no direct-URL dependencies remain).
+- Made `indra-cogex` an optional dependency: its imports are now guarded, so the
+  package installs and imports without it. Install it from source only if the
+  Neo4j-backed CoGEx features are needed.
 - Refreshed the README to match the current package and point to the
   `user_manual.ipynb` vignette instead of inline quick-start code.
 - Pinned `black==25.9.0` and `isort==8.0.1` in CI and the `dev` extra so local
@@ -33,12 +38,13 @@ First publicly packaged release, focused on publication readiness.
 
 ### Fixed
 - Two latent bugs surfaced while building the test suite.
-- `test_run_graph_sim` now skips gracefully when the optional `notears`
-  dependency is absent instead of erroring.
 - Restored `data/images/logo.png`, which had been committed as a corrupt
   489-byte download.
 
 ### Removed
+- The `causomic.validation` subpackage (baseline comparisons and benchmark
+  workflow) and the `run_graph_sim` benchmark, along with the `notears` optional
+  dependency; validation is now run externally.
 - Large data files, `.pkl` graph objects, notebooks, and binary docs from the
   repository and from git history (`.git` reduced from ~433 MB to ~7 MB).
 - Stale benchmark and vignette scripts no longer part of the package.

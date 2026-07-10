@@ -60,8 +60,10 @@ dependencies = [
 	"tqdm",
 	"seaborn",
 	"y0",
-	"indra @ git+https://github.com/gyorilab/indra.git",
-	"indra-cogex @ git+https://github.com/gyorilab/indra_cogex.git",
+	"indra",
+	# indra depends on pysb; pin to the only version that ships a wheel (older
+	# sdists use a broken ez_setup bootstrap that fails to build).
+	"pysb>=1.17.0",
 	"protmapper",
 	"numpyro",
 	"jax",
@@ -79,9 +81,6 @@ Homepage = "https://github.com/Vitek-Lab/Causomic"
 "Source Code" = "https://github.com/Vitek-Lab/Causomic"
 
 [project.optional-dependencies]
-notears = [
-	"notears @ git+https://github.com/xunzheng/notears.git",
-]
 test = [
 	"pytest>=7",
 	"pytest-cov",
