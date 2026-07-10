@@ -5,7 +5,7 @@ development environment, the conventions we follow, and how to submit changes.
 
 ## Development setup
 
-Causomic targets Python 3.10–3.11 and depends on PyTorch 2.0.1 and Pyro. We
+Causomic targets Python 3.11 and depends on PyTorch 2.0.1 and Pyro. We
 recommend a clean virtual environment.
 
 ```bash
