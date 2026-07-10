@@ -11,14 +11,14 @@
 
 **Causal inference methods for -omics research**
 
-Causomic is a Python package designed to perform causal inference using different types of -omics data, including proteomics, transcriptomics, metabolomics, phosphoproteomics, ect. The primary goal is to predict the effects of interventions (e.g., drug treatments, protein inhibitions) on biological systems by leveraging causal modeling techniques and protein interaction networks.
+Causomic is a Python package for causal inference on -omics data (proteomics, transcriptomics, metabolomics, phosphoproteomics, etc.). Its goal is to predict the effects of interventions (e.g., drug treatments, protein inhibitions) on biological systems by combining prior-knowledge interaction networks with deep probabilistic causal models.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
-- [Quick Start](#quick-start)
+- [Getting Started](#getting-started)
 - [Data Requirements](#data-requirements)
 - [Main Components](#main-components)
 - [Documentation](#documentation)
@@ -30,10 +30,10 @@ Causomic is a Python package designed to perform causal inference using differen
 
 A fundamental challenge in biological experimentation is understanding how interventions (e.g., drug treatments, protein inhibitions) affect complex biological systems. Traditional machine learning approaches, particularly black box models, attempt to predict these effects without explicitly modeling the underlying causal relationships. This can be problematic when explainability is crucial (e.g., identifying disease-driving pathways) or when models incorrectly infer that downstream proteins causally influence upstream targets. Causomic addresses these limitations by:
 
-1. **Integrating prior biological knowledge** from biological network databases
-2. **Building causal graphs** that represent protein relationships
+1. **Integrating prior biological knowledge** from biological network databases (e.g., INDRA)
+2. **Building causal graphs** that represent protein relationships and reconciling them with experimental data
 3. **Training deep probabilistic models** with variational Bayesian inference (Pyro/PyTorch)
-4. **Predicting intervention effects** on downstream proteins
+4. **Predicting intervention effects** on downstream proteins with uncertainty quantification
 
 The package is particularly useful for:
 - Drug discovery and target identification
@@ -45,31 +45,29 @@ The package is particularly useful for:
 
 ### 🧬 **Prior Knowledge Network (PKN) Construction**
 - Integration with INDRA (Integrated Network and Dynamical Reasoning Assembler)
-- Automatic extraction of protein interaction networks
-- Support for GSEA-driven pathway analysis
-- Posterior network estimation using PKN and experimental data
+- Automatic extraction and filtering of protein interaction networks
+- Reconciliation of a prior network with experimental data via bootstrapped structure learning
 
 ### 📊 **Causal Modeling**
-- Bayesian probabilistic models using Pyro
-- Latent variable models for handling missing data
+- Bayesian probabilistic models using Pyro (latent-variable structural causal models)
 - Support for both observational and interventional data
+- Native handling of missing data
 - Uncertainty quantification for predictions
 
 ### 🎯 **Intervention Prediction**
-- Predict effects of protein inhibitions
-- Estimate downstream pathway responses
-- Quantify prediction uncertainty
-- Validation against experimental data
+- Predict downstream effects of protein inhibitions
+- Estimate pathway-level responses
+- Validate predictions against experimental data
 
 ### 🔬 **MS Data Processing**
 - Integration with proteomics (MSstats) output format
-- Data normalization and preprocessing utilities
-- Handling of protein-level summarized data
+- Normalization, summarization, and imputation utilities
+- Gene-set correlation and pathway over-representation analysis (ORA)
 
-### **Simulation**
-- Generate example graphs which exhibit different causal structures
-- Simulate data over causal graphs using real world data generating processes
-- Leverage simulations for method validations
+### 🧪 **Simulation & Validation**
+- Generate example graphs exhibiting different causal structures
+- Simulate realistic proteomics data over causal graphs
+- Benchmark against baselines (PC, hill-climbing, NOTEARS) for method validation
 
 ## Installation
 
@@ -85,125 +83,102 @@ cd Causomic
 pip install -e .
 ```
 
-### Dependencies
-The main dependencies include:
-- `pyro-ppl==1.8.5` - Probabilistic programming
-- `torch` - Deep learning framework
-- `networkx` - Graph manipulation
-- `pandas` - Data manipulation
-- `numpy` - Numerical computing
-- `scipy` - Scientific computing and optimization
-- `scikit-learn` - Imputation, regression, and model utilities
-- `pgmpy` - Probabilistic graphical model structure learning
-- `indra` and `indra-cogex` - Prior biological network extraction (installed from GitHub)
-- `protmapper` - Identifier normalization for INDRA workflows
-- `numpyro` and `jax` - Alternate Bayesian backend support
-- `matplotlib` - Plotting
-- `seaborn` - Statistical visualization
-- `tqdm` - Progress bars
-- `joblib` - Parallel execution
-- `y0` - Network analysis utilities
+Some dependencies (INDRA and INDRA-CoGEx) are installed directly from GitHub; a
+network connection is required on first install.
 
-Optional dependency:
-- `notears` - Continuous DAG structure learning (`pip install "causomic[notears]"`)
+### Optional dependencies
+- `notears` — continuous DAG structure learning, used by the validation
+  baselines: `pip install "causomic[notears]"`
+- `dev` — testing and linting tools (`pytest`, `black`, `isort`):
+  `pip install -e ".[dev]"`
 
-## Quick Start
+## Getting Started
 
-```python
-from causomic.data_analysis.proteomics_data_processor import dataProcess
+The end-to-end workflow follows three steps:
 
-from causomic.simulation.example_graphs import mediator
-from causomic.simulation.proteomics_simulator import simulate_data
+1. **Learn the causal graph** — build a prior-knowledge network (e.g. from INDRA)
+   and reconcile it with your data into a causal DAG.
+2. **Train the structural causal model** — fit the latent-variable model (`LVM`)
+   to your protein-level data over that graph.
+3. **Predict interventions** — query the trained model for the downstream
+   effect of an intervention (e.g. inhibiting a target protein).
 
-# 1. Load your data (we use simulation)
-med_graph = mediator(add_independent_nodes=False, output_node=False)
-    
-simulated_data = simulate_data(
-      med_graph['Networkx'], 
-      coefficients=med_graph['Coefficients'], 
-      add_error=False,
-      mnar_missing_param=[-3, 0.4],  # Missing not at random
-      add_feature_var=True, 
-      n=100, 
-      seed=2
-)
-
-# 2. Preprocess data (assuming MS proteomics data)
-input_data = dataProcess(
-    simulated_data["Feature_data"], 
-    normalization=False, 
-    summarization_method="TMP", 
-    MBimpute=False, 
-    sim_data=True
-)
-
-# 4. Fit causal model
-from causomic.causal_model.LVM import LVM
-
-lvm = LVM(backend="pyro", num_steps=2000, verbose=True)
-lvm.fit(input_data, med_graph["causomic"])
-
-# 5. Make predictions
-intervention_value = 7.0
-lvm.intervention({"X": intervention_value}, "Z")
-```
+📓 **The complete, runnable walkthrough lives in the
+[User Manual notebook](vignettes/user_manual.ipynb).** It covers both a
+simulated ground-truth system and a real INDRA network (EGFR inhibition),
+from graph construction through interventional inference. Start there.
 
 ## Data Requirements
 
 ### Input Data Format
-Causomic expects data in different formats depending on where in the pipeline 
-you start. The causal model and graph construction expects data in wide-format 
-with genes as the columns, samples as the rows, and values being quantitative 
-experimental values.
+Causomic expects data in different formats depending on where in the pipeline
+you start. The causal model and graph construction expect data in wide format
+with genes as columns, samples as rows, and values being quantitative
+experimental measurements.
 
 ### Preprocessing with MSstats (R)
 
-If you are using MS-based proteomics data, we recommend running the data through 
-the MSstats pipeline through the `dataProcess` function. Then you can input the 
-`ProteinLevelData` object directly into Causomic.
-
-Implementation of `dataProcess` directly into Causomic is ongoing.
+If you are using MS-based proteomics data, we recommend running the data through
+the MSstats pipeline via `dataProcess`. The resulting `ProteinLevelData` object
+can be passed directly into Causomic. A Python-side `dataProcess` is available in
+`causomic.data_analysis` for simulated and summarized data.
 
 ## Main Components
 
-### 📈 **Data Analysis** (`causomic.data_analysis`)
-- Data normalization and preprocessing
-- Statistical utilities for proteomics data
-- Integration with MSstats workflows
-
 ### 🕸️ **Graph Construction** (`causomic.graph_construction`)
-- INDRA network queries and processing
-- Protein interaction network building
-- Graph filtering and validation utilities
+Build, filter, and query biological interaction graphs, and reconcile a prior
+network with experimental data.
+- `prepare_graph`, `add_evidence_info`, `filter_graph_by_evidence_count`
+- `query_drug_targets`, `query_effect_nodes`, `query_forward_paths`, `query_confounders`
+- `prepare_indra_priors`, `run_bootstrap`, `calculate_edge_probabilities`
 
 ### 🎯 **Causal Modeling** (`causomic.causal_model`)
-- Probabilistic models for causal inference
-- Bayesian parameter estimation
-- Intervention effect prediction
-- Latent variable models for missing data
+Probabilistic structural causal models for intervention prediction.
+- `LVM` — latent-variable model (fit / intervention interface)
+- `ProteomicPerturbationModel`, `StochasticEdgeProteomicModel` — underlying Pyro models
+
+### 📈 **Data Analysis** (`causomic.data_analysis`)
+Proteomics preprocessing and downstream analysis.
+- `dataProcess`, `normalize_median`, `summarize_data`, `imputation`
+- `gen_correlation_matrix`, `test_gene_sets`, `prep_msstats_data`
+- `run_ora`, `fetch_pathway_library`, `select_diverse_pathways`, `export_to_cytoscape`
 
 ### 🧪 **Simulation** (`causomic.simulation`)
-- Synthetic data generation for testing
-- Model validation utilities
-- Simulation studies for method development
+Synthetic graph and data generation for testing and method development.
+- `mediator`, `backdoor`, `frontdoor`, `signaling_network` — example graphs
+- `simulate_data`, `generate_coefficients`, `build_igf_network`
+- `generate_structured_dag`, `generate_indra_data`, `generate_cyclic_graph`
+
+### 🔬 **Validation** (`causomic.validation`)
+Benchmarking against baseline structure-learning algorithms.
+- `fit_pc`, `fit_hc`, `fit_notears` — baseline network learners
+- `run_benchmark` — end-to-end model-validation workflow
+
+### 🚀 **High-Level Entry Points**
+- `causomic.network` — network estimation helpers (`extract_indra_prior`,
+  `consensus_dag`, `estimate_posterior_dag`, `filter_to_causal_subgraph`, …)
+- `causomic.workflows` — packaged pipelines (`run_toxicity_detection_workflow`)
 
 ## Documentation
 
 ### User Manual
-The primary documentation is available as a Jupyter notebook:
-- [User Manual](vignettes/user_manual.ipynb) - Complete workflow and API reference
+The primary documentation is the runnable notebook:
+- [User Manual](vignettes/user_manual.ipynb) — complete workflow, from graph
+  construction to interventional inference, on both simulated and real data.
 
 ### API Reference
-Detailed API documentation is available in the source code docstrings. Key modules:
+Detailed API documentation lives in the source-code docstrings. Key modules:
 
-- `causomic.causal_model.models` - Core causal models
-- `causomic.graph_construction.utils` - Network utilities
-- `causomic.data_analysis.normalization` - Data preprocessing
-- `causomic.simulation` - Synthetic data generation
+- `causomic.causal_model.LVM` — latent-variable causal model
+- `causomic.causal_model.models` — underlying Pyro model definitions
+- `causomic.graph_construction.utils_nx` — network construction and querying
+- `causomic.graph_construction.prior_data_reconciliation` — prior/data reconciliation
+- `causomic.data_analysis.proteomics_data_processor` — data preprocessing
+- `causomic.simulation` — synthetic graph and data generation
 
 ## Contributing
 
-We welcome contributions! Please see our contributing guidelines:
+We welcome contributions! Please also see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -218,11 +193,12 @@ cd Causomic
 pip install -e ".[dev]"
 ```
 
-### Code Style
-We use Black for code formatting and isort for import sorting:
+### Code Style & Tests
+We use Black for formatting and isort for import sorting, and pytest for tests:
 ```bash
-black src/
-isort src/
+black --check src/ tests/
+isort --check-only src/ tests/
+pytest
 ```
 
 ## Citation
