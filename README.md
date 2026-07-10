@@ -211,7 +211,7 @@ If you use Causomic in your research, please cite:
   author={Kohler, Devon},
   year={2024},
   url={https://github.com/Vitek-Lab/Causomic},
-  version={0.0.1-dev}
+  version={0.9.0}
 }
 ```
 
