@@ -68,6 +68,10 @@ def test_invalid_backend_raises():
         LVM(backend="tensorflow")
 
 
+def test_default_backend_is_pyro():
+    assert LVM().backend == "pyro"
+
+
 def test_init_defaults_and_repr():
     lvm = LVM(backend="pyro")
     assert lvm.model is None

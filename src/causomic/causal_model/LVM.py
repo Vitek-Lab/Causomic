@@ -91,8 +91,10 @@ class LVM:
 
     Parameters
     ----------
-    backend : {"pyro", "numpyro"}, default="numpyro"
-        Probabilistic programming backend to use for inference
+    backend : {"pyro", "numpyro"}, default="pyro"
+        Probabilistic programming backend to use for inference. The "pyro"
+        backend is the default and fully supported; the "numpyro" backend is
+        experimental and its intervention path is not yet complete.
     num_samples : int, default=1000
         Number of posterior samples to draw during inference
     warmup_steps : int, default=1000
@@ -196,7 +198,7 @@ class LVM:
 
     def __init__(
         self,
-        backend: Literal["pyro", "numpyro"] = "numpyro",
+        backend: Literal["pyro", "numpyro"] = "pyro",
         num_samples: int = 1000,
         warmup_steps: int = 1000,
         num_chains: int = 4,
