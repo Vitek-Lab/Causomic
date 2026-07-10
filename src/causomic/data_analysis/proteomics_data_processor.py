@@ -57,30 +57,32 @@ def format_sim_data(data: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-    # Add required metadata columns
-    data.loc[:, "PrecursorCharge"] = 2
-    data.loc[:, "FragmentIon"] = np.nan
-    data.loc[:, "ProductCharge"] = np.nan
-    data.loc[:, "IsotopeLabelType"] = "L"
-    data.loc[:, "Condition"] = "Obs"
-    data.loc[:, "Run"] = data.loc[:, "BioReplicate"]
-    data.loc[:, "Fraction"] = 1
+    # Add required metadata columns. Assign via ``data[col] =`` (column
+    # replacement) rather than ``data.loc[:, col] =`` (in-place set); the latter
+    # raises under pandas >= 3.0 when a column's dtype changes (e.g. int -> str).
+    data["PrecursorCharge"] = 2
+    data["FragmentIon"] = np.nan
+    data["ProductCharge"] = np.nan
+    data["IsotopeLabelType"] = "L"
+    data["Condition"] = "Obs"
+    data["Run"] = data["BioReplicate"]
+    data["Fraction"] = 1
 
     # Format peptide sequence and run identifiers
-    data.loc[:, "PeptideSequence"] = (
-        data.loc[:, "ProteinName"].astype(str) + "_" + data.loc[:, "PeptideSequence"].astype(str)
+    data["PeptideSequence"] = (
+        data["ProteinName"].astype(str) + "_" + data["PeptideSequence"].astype(str)
     )
-    data.loc[:, "Run"] = data.loc[:, "Run"].astype(str) + "_" + data.loc[:, "Condition"].astype(str)
+    data["Run"] = data["Run"].astype(str) + "_" + data["Condition"].astype(str)
 
     # Create MSstats-compatible feature identifier
-    data.loc[:, "Feature"] = (
-        data.loc[:, "PeptideSequence"].astype(str)
+    data["Feature"] = (
+        data["PeptideSequence"].astype(str)
         + "_"
-        + data.loc[:, "PrecursorCharge"].astype(str)
+        + data["PrecursorCharge"].astype(str)
         + "_"
-        + data.loc[:, "FragmentIon"].astype(str)
+        + data["FragmentIon"].astype(str)
         + "_"
-        + data.loc[:, "ProductCharge"].astype(str)
+        + data["ProductCharge"].astype(str)
         + "_"
     )
 
