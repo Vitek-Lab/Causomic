@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install lint tools
-        run: pip install black isort
+        run: pip install black==25.9.0 isort==8.0.1
       - name: Check formatting
         run: |
           black --check src/ tests/
