@@ -4,7 +4,7 @@
 
 # Causomic
 
-[![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![codecov](https://codecov.io/gh/Vitek-Lab/Causomic/branch/main/graph/badge.svg)](https://codecov.io/gh/Vitek-Lab/Causomic)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Development Status](https://img.shields.io/badge/status-development-orange.svg)](https://github.com/Vitek-Lab/Causomic)
@@ -72,7 +72,7 @@ The package is particularly useful for:
 ## Installation
 
 ### Prerequisites
-- Python 3.11
+- Python 3.10 or 3.11
 - PyTorch 2.0.1
 - Pyro-PPL
 
@@ -211,7 +211,7 @@ If you use Causomic in your research, please cite:
   author={Kohler, Devon},
   year={2024},
   url={https://github.com/Vitek-Lab/Causomic},
-  version={0.0.1-dev}
+  version={0.9.0}
 }
 ```
 
