@@ -14,14 +14,14 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from causomic.graph_construction.utils_nx import (
-    query_effect_nodes,
-    query_forward_paths,
-    query_drug_targets,
-)
 from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     SparseHillClimb,
+)
+from causomic.graph_construction.utils_nx import (
+    query_drug_targets,
+    query_effect_nodes,
+    query_forward_paths,
 )
 from causomic.network import estimate_posterior_dag, repair_confounding
 

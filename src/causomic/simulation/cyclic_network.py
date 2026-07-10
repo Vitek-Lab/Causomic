@@ -69,16 +69,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
-import pandas as pd
 import numpy.linalg as _npl
+import pandas as pd
 
-from causomic.simulation.random_network import generate_structured_dag
 from causomic.simulation.proteomics_simulator import (
     add_missing,
     generate_coefficients,
     generate_features,
     simulate_node,
 )
+from causomic.simulation.random_network import generate_structured_dag
 
 
 def generate_cyclic_graph(

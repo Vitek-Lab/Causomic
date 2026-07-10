@@ -76,7 +76,9 @@ def test_start_cycle_through_existing_mediator_size_two():
     assert "start" in roles["cycle_nodes"]
     anchor = roles["start"][0]
     # Anchor participates in a mutual edge with the routed mediator.
-    assert any(graph.has_edge(anchor, m) and graph.has_edge(m, anchor) for m in graph.successors(anchor))
+    assert any(
+        graph.has_edge(anchor, m) and graph.has_edge(m, anchor) for m in graph.successors(anchor)
+    )
 
 
 def test_start_cycle_through_existing_mediator_size_three():
@@ -119,7 +121,9 @@ def test_end_cycle_through_existing_mediator_size_two():
     assert not nx.is_directed_acyclic_graph(graph)
     assert "end" in roles["cycle_nodes"]
     anchor = roles["end"][0]
-    assert any(graph.has_edge(anchor, m) and graph.has_edge(m, anchor) for m in graph.successors(anchor))
+    assert any(
+        graph.has_edge(anchor, m) and graph.has_edge(m, anchor) for m in graph.successors(anchor)
+    )
 
 
 def test_end_cycle_through_existing_mediator_size_three():
@@ -232,9 +236,7 @@ def test_ground_truth_interventional_effect_cyclic_intervened_node_delta():
     sim = cn.simulate_cyclic_data(graph, roles, n=20, seed=6, add_feature_var=False, verbose=False)
     coeffs = sim["Coefficients"]
     target = roles["start"][0]
-    gt = cn.ground_truth_interventional_effect_cyclic(
-        graph, coeffs, {target: 42.0}, roles["end"]
-    )
+    gt = cn.ground_truth_interventional_effect_cyclic(graph, coeffs, {target: 42.0}, roles["end"])
     assert gt["interventional"][target] == 42.0
     # A surviving multi-node SCC (the mediator cycle) must be solved and present.
     cycle_nodes = roles["cycle_nodes"]["mediators"]

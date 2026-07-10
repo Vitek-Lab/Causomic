@@ -60,9 +60,7 @@ def test_random_acyclic_subgraph_respects_max_indegree():
     nodes = ["A", "B", "C", "T"]
     allowed = [("A", "T"), ("B", "T"), ("C", "T")]
     rng = np.random.default_rng(7)
-    dag = pdr.random_acyclic_subgraph(
-        nodes, allowed, inclusion_prob=1.0, rng=rng, max_indegree=1
-    )
+    dag = pdr.random_acyclic_subgraph(nodes, allowed, inclusion_prob=1.0, rng=rng, max_indegree=1)
     assert len(dag.get_parents("T")) <= 1
     assert nx.is_directed_acyclic_graph(dag)
 
@@ -159,9 +157,7 @@ def test_prepare_indra_priors_use_source_counts():
             "source_count": [50, 60],
         }
     )
-    priors = pdr.prepare_indra_priors(
-        df, convert_to_probability=False, use_source_counts=True
-    )
+    priors = pdr.prepare_indra_priors(df, convert_to_probability=False, use_source_counts=True)
     assert priors == {("A", "X"): 50, ("B", "Y"): 60}
 
 
@@ -177,9 +173,7 @@ def test_remove_high_corr_edges_from_blacklist():
             "C": [5.0, 4.0, 3.0, 2.0, 1.0],
         }
     )
-    indra_priors = pd.DataFrame(
-        {"source": ["A"], "target": ["C"], "evidence_count": [10]}
-    )
+    indra_priors = pd.DataFrame({"source": ["A"], "target": ["C"], "evidence_count": [10]})
     black_list = {("A", "B"), ("B", "A"), ("A", "C")}
 
     updated_priors, updated_blacklist = pdr.remove_high_corr_edges_from_blacklist(
@@ -210,9 +204,7 @@ def test_remove_high_corr_edges_from_blacklist_keeps_low_corr():
             "B": [1.0, 0.0, 1.0, 0.0, 1.0],
         }
     )
-    indra_priors = pd.DataFrame(
-        {"source": ["A"], "target": ["B"], "evidence_count": [3]}
-    )
+    indra_priors = pd.DataFrame({"source": ["A"], "target": ["B"], "evidence_count": [3]})
     black_list = {("A", "B")}
 
     _, updated_blacklist = pdr.remove_high_corr_edges_from_blacklist(
