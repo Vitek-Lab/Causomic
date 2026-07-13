@@ -376,11 +376,13 @@ class SparseHillClimb(HillClimbSearch):
                 continue
             if (Y, X) in forbidden:
                 continue
-            # cycle check for flips
-            # if any(len(path) > 2 for path in nx.all_simple_paths(model, X, Y)):
-            #     continue
+            # Cycle check for the flip X->Y => Y->X. After removing X->Y, adding
+            # Y->X creates a cycle iff a directed path X~>Y still exists (X~>Y plus
+            # Y->X closes a loop), so we must test that direction. The previous
+            # check used has_path(Y, X), which let cycle-creating flips through and
+            # produced non-DAG search outputs.
             model.remove_edge(X, Y)
-            if nx.has_path(model, Y, X):
+            if nx.has_path(model, X, Y):
                 model.add_edge(X, Y)
                 continue
             model.add_edge(X, Y)
