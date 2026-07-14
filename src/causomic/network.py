@@ -583,8 +583,22 @@ def nodes_on_causal_paths(
     BFS passes.
     """
     directed = G.directed
-    start_nodes = set(start_nodes) & set(directed.nodes)
-    end_nodes = set(end_nodes) & set(directed.nodes)
+    # y0 stores nodes as Variable objects, but callers typically pass plain gene
+    # name strings. Match on the node's string name so either form resolves to the
+    # actual graph node (otherwise the set intersection is empty and the filter
+    # silently drops every node).
+    by_name = {getattr(n, "name", str(n)): n for n in directed.nodes}
+
+    def _resolve(names):
+        resolved = set()
+        for x in names:
+            key = getattr(x, "name", str(x))
+            if key in by_name:
+                resolved.add(by_name[key])
+        return resolved
+
+    start_nodes = _resolve(start_nodes)
+    end_nodes = _resolve(end_nodes)
 
     # Forward-reachable from any start node
     forward = set()
