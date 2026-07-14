@@ -376,11 +376,13 @@ class SparseHillClimb(HillClimbSearch):
                 continue
             if (Y, X) in forbidden:
                 continue
-            # cycle check for flips
-            # if any(len(path) > 2 for path in nx.all_simple_paths(model, X, Y)):
-            #     continue
+            # Cycle check for the flip X->Y => Y->X. After removing X->Y, adding
+            # Y->X creates a cycle iff a directed path X~>Y still exists (X~>Y plus
+            # Y->X closes a loop), so we must test that direction. The previous
+            # check used has_path(Y, X), which let cycle-creating flips through and
+            # produced non-DAG search outputs.
             model.remove_edge(X, Y)
-            if nx.has_path(model, Y, X):
+            if nx.has_path(model, X, Y):
                 model.add_edge(X, Y)
                 continue
             model.add_edge(X, Y)
@@ -766,6 +768,8 @@ def process_bootstrap(
     expert_knowledge: ExpertKnowledge,
     seed: int = 0,
     random_init: bool = False,
+    subsample_frac: float = 0.65,
+    replace: bool = True,
 ) -> Optional[DAG]:
     """
     Process single bootstrap sample for causal discovery with uncertainty quantification.
@@ -833,8 +837,9 @@ def process_bootstrap(
     logging.getLogger("pgmpy").setLevel(logging.WARNING)
 
     rng = np.random.RandomState(seed)
-    subsample_frac = 0.65  # try 0.5–0.8
-    resampled_data = data.sample(frac=subsample_frac, replace=True, random_state=rng)
+    # subsample_frac<1 with replace=True -> a bootstrap resample (consensus mode);
+    # subsample_frac=1 with replace=False -> the full data (best-of-restarts mode).
+    resampled_data = data.sample(frac=subsample_frac, replace=replace, random_state=rng)
 
     # Initialize the custom scoring function
     custom_score = score_fn(resampled_data, edge_priors=edge_priors, prior_strength=prior_strength)
@@ -1136,6 +1141,8 @@ def run_bootstrap(
     convert_to_probability: bool = True,
     use_source_counts: bool = False,
     random_init: bool = False,
+    subsample_frac: float = 0.65,
+    replace: bool = True,
     verbose: bool = True,
 ) -> list:
     """
@@ -1271,8 +1278,10 @@ def run_bootstrap(
             expert_knowledge,
             seed=i,
             random_init=random_init,
+            subsample_frac=subsample_frac,
+            replace=replace,
         )
-        for i in tqdm(range(n_bootstrap), desc="Hill Climb Bootstraps")
+        for i in tqdm(range(n_bootstrap), desc="Hill Climb runs")
     )
     # for _ in range(n_bootstrap):
     #     process_bootstrap(

@@ -57,6 +57,7 @@ from causomic.graph_construction.prior_data_reconciliation import (
     BICGaussIndraPriors,
     SparseHillClimb,
     calculate_edge_probabilities,
+    prepare_indra_priors,
     run_bootstrap,
 )
 from causomic.graph_construction.repair import convert_to_y0_graph, process_failed_test
@@ -291,6 +292,58 @@ def consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=0.5):
     return G
 
 
+def best_scoring_dag(dags, data, edge_priors, scoring_function, prior_strength):
+    """Select the single highest-scoring acyclic DAG from candidate runs.
+
+    Each candidate is scored by its total local score
+    (``sum_v scoring_function.local_score(v, parents_v)``) on the full ``data``.
+    This implements "best-of-restarts" selection: run the hill climb from many
+    random initializations and keep the run that reached the best-scoring local
+    optimum, rather than voting on individual edges across bootstrap resamples.
+
+    Parameters
+    ----------
+    dags : list of DAG or None
+        Candidate DAGs (e.g. the per-restart outputs of ``run_bootstrap``).
+    data : pd.DataFrame
+        Full observational data used to score every candidate on equal footing.
+    edge_priors : dict
+        {(parent, child): prior_probability} for the allowed edges.
+    scoring_function : type
+        Scoring class (e.g. ``BICGaussIndraPriors``); BIC penalizes complexity
+        more heavily than AIC and is the recommended choice here.
+    prior_strength : float
+        Passed through to the scoring function.
+
+    Returns
+    -------
+    (best_dag, scores) : tuple[nx.DiGraph, list[Optional[float]]]
+        ``best_dag`` is the top-scoring candidate (an empty DiGraph over the data
+        columns if none are valid); ``scores`` is the per-candidate total score
+        (``None`` for missing or cyclic runs), aligned with ``dags``.
+    """
+    scorer = scoring_function(data, edge_priors=edge_priors, prior_strength=prior_strength)
+    best, best_score, scores = None, -np.inf, []
+    for dag in dags:
+        if dag is None:
+            scores.append(None)
+            continue
+        G = nx.DiGraph()
+        G.add_nodes_from(data.columns)
+        G.add_edges_from(dag.edges())
+        if not nx.is_directed_acyclic_graph(G):
+            scores.append(None)
+            continue
+        s = float(sum(scorer.local_score(v, list(G.predecessors(v))) for v in data.columns))
+        scores.append(s)
+        if s > best_score:
+            best_score, best = s, dag
+    if best is None:
+        best = nx.DiGraph()
+        best.add_nodes_from(data.columns)
+    return best, scores
+
+
 def estimate_posterior_dag(
     data: pd.DataFrame,
     indra_priors: pd.DataFrame,
@@ -305,6 +358,8 @@ def estimate_posterior_dag(
     use_source_counts: bool = False,
     return_bootstrap_dags: bool = False,
     random_init: bool = False,
+    selection: str = "best_of",
+    return_runs: bool = False,
     verbose: bool = True,
 ) -> NxMixedGraph:
     """
@@ -447,8 +502,23 @@ def estimate_posterior_dag(
             + ", ".join(sorted(missing_nodes))
         )
 
-    # Prepare input arguments for bootstrap sampling
-    model_input = (
+    # ------------------------------------------------------------------
+    # Run the search many times, then reduce to a single posterior DAG.
+    #   selection="best_of"   -> n_bootstrap random-restart hill climbs on the
+    #                            FULL data; keep the highest-scoring acyclic DAG
+    #                            (use a BIC scoring_function to control false edges).
+    #   selection="consensus" -> bootstrap resamples + >=edge_probability edge vote
+    #                            (the original behaviour).
+    # ------------------------------------------------------------------
+    if selection == "best_of":
+        run_frac, run_replace, run_random_init = 1.0, False, True
+    elif selection == "consensus":
+        run_frac, run_replace, run_random_init = 0.65, True, random_init
+    else:
+        raise ValueError(f"Unknown selection={selection!r}; use 'best_of' or 'consensus'.")
+
+    # Run the search to generate multiple DAG hypotheses
+    bootstrap_dags = run_bootstrap(
         data,
         indra_priors,
         prior_strength,
@@ -460,20 +530,29 @@ def estimate_posterior_dag(
         n_bootstrap,
         convert_to_probability,
         use_source_counts,
-        random_init,
+        run_random_init,
+        subsample_frac=run_frac,
+        replace=run_replace,
+        verbose=verbose,
     )
 
-    # Run bootstrap sampling to generate multiple DAG hypotheses
-    bootstrap_dags = run_bootstrap(*model_input, verbose=verbose)
-
-    # Integrate bootstrap results into one final DAG using consensus approach
-    posterior_dag = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=edge_probability)
-    posterior_dag = pd.DataFrame(posterior_dag.edges, columns=["source", "target"])
+    # Reduce the runs to one posterior DAG
+    run_scores = None
+    if selection == "best_of":
+        edge_priors = prepare_indra_priors(indra_priors, convert_to_probability, use_source_counts)
+        best_dag, run_scores = best_scoring_dag(
+            bootstrap_dags, data, edge_priors, scoring_function, prior_strength
+        )
+        posterior_dag = pd.DataFrame(list(best_dag.edges()), columns=["source", "target"])
+    else:
+        cons = consensus_dag(bootstrap_dags, indra_priors, lam=0.25, min_freq=edge_probability)
+        posterior_dag = pd.DataFrame(list(cons.edges()), columns=["source", "target"])
 
     # Convert posterior DAG to y0 graph format
     y0_graph = convert_to_y0_graph(posterior_dag)
 
-    # Compute per-edge bootstrap frequencies and store as edge_prob attribute
+    # Per-edge frequency across runs, stored as edge_prob (bootstrap frequency for
+    # consensus; restart-stability for best_of).
     valid_dags = [d for d in bootstrap_dags if d is not None]
     total = len(valid_dags)
     edge_counts: Counter = Counter()
@@ -485,6 +564,8 @@ def estimate_posterior_dag(
             edge_counts[(str(u), str(v))] / total if total > 0 else 0.5
         )
 
+    if return_runs:
+        return y0_graph, bootstrap_dags, run_scores
     if return_bootstrap_dags:
         return y0_graph, bootstrap_dags
     return y0_graph
