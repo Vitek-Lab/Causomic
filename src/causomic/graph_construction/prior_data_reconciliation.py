@@ -768,6 +768,8 @@ def process_bootstrap(
     expert_knowledge: ExpertKnowledge,
     seed: int = 0,
     random_init: bool = False,
+    subsample_frac: float = 0.65,
+    replace: bool = True,
 ) -> Optional[DAG]:
     """
     Process single bootstrap sample for causal discovery with uncertainty quantification.
@@ -835,8 +837,9 @@ def process_bootstrap(
     logging.getLogger("pgmpy").setLevel(logging.WARNING)
 
     rng = np.random.RandomState(seed)
-    subsample_frac = 0.65  # try 0.5–0.8
-    resampled_data = data.sample(frac=subsample_frac, replace=True, random_state=rng)
+    # subsample_frac<1 with replace=True -> a bootstrap resample (consensus mode);
+    # subsample_frac=1 with replace=False -> the full data (best-of-restarts mode).
+    resampled_data = data.sample(frac=subsample_frac, replace=replace, random_state=rng)
 
     # Initialize the custom scoring function
     custom_score = score_fn(resampled_data, edge_priors=edge_priors, prior_strength=prior_strength)
@@ -1138,6 +1141,8 @@ def run_bootstrap(
     convert_to_probability: bool = True,
     use_source_counts: bool = False,
     random_init: bool = False,
+    subsample_frac: float = 0.65,
+    replace: bool = True,
     verbose: bool = True,
 ) -> list:
     """
@@ -1273,8 +1278,10 @@ def run_bootstrap(
             expert_knowledge,
             seed=i,
             random_init=random_init,
+            subsample_frac=subsample_frac,
+            replace=replace,
         )
-        for i in tqdm(range(n_bootstrap), desc="Hill Climb Bootstraps")
+        for i in tqdm(range(n_bootstrap), desc="Hill Climb runs")
     )
     # for _ in range(n_bootstrap):
     #     process_bootstrap(
