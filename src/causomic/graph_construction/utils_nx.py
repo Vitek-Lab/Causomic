@@ -114,7 +114,19 @@ def prepare_graph(
         node_types: Allowed node namespace types (e.g., ["HGNC"]). If
             omitted, all node namespaces are allowed.
         stmt_types: Allowed statement types to keep on edges. If omitted,
-            all statement types are allowed.
+            all statement types are allowed. This is matched verbatim against
+            whatever ``stmt_type`` string each raw INDRA statement dict carries
+            (see the ``"statements"`` edge attribute) — there is no fixed enum
+            or validation, so a typo silently drops all statements of that
+            type rather than raising. Common values seen in INDRA output
+            include "IncreaseAmount", "DecreaseAmount", "Activation",
+            "Inhibition", "Phosphorylation", and "Dephosphorylation". Amount
+            changes ("IncreaseAmount"/"DecreaseAmount") are the right choice
+            when the downstream readout is total protein abundance; include
+            the phospho-specific types ("Phosphorylation"/
+            "Dephosphorylation") as well when the readout is itself
+            phosphorylation data, since phospho-state changes are not
+            necessarily reflected in the amount-change statement types.
 
     Returns:
         A prepared :class:`networkx.DiGraph` suitable for path queries and
@@ -529,6 +541,12 @@ def query_forward_paths(
 ) -> pd.DataFrame:
     """Search for simple forward paths from any start node to any end node.
 
+    This is the built-in control for how far a path is allowed to travel
+    between a source and target node: ``n_mediators`` sets the maximum number
+    of intermediate nodes allowed on a source -> target path (path length =
+    ``n_mediators + 1`` edges). Use it instead of reimplementing path-length
+    pruning on top of the raw graph.
+
     For each mediator depth from 0..n_mediators the function will collect
     paths with exactly that many intermediate nodes between the start and
     end nodes. This corresponds to path lengths of ``mediator_count + 1``
@@ -543,12 +561,13 @@ def query_forward_paths(
         graph: DiGraph annotated with evidence counts on edges.
         start_nodes: Iterable of starting node ids.
         end_nodes: Iterable of target node ids.
-        n_mediators: Maximum number of mediator nodes between start and end.
-        med_ev_filter: Optional list of integer thresholds with length
+        n_mediators: Maximum number of intermediate nodes allowed on a
+            source -> target path (path length = n_mediators + 1 edges).
+        med_ev_filter: Per-depth evidence-count thresholds: a list of length
             ``n_mediators + 1`` where index ``i`` applies to paths with
             ``i`` mediators. If None, defaults to all ones.
-        med_src_filter: Optional list of integer source count thresholds with
-            length ``n_mediators + 1`` where index ``i`` applies to paths with
+        med_src_filter: Per-depth source-count thresholds: a list of length
+            ``n_mediators + 1`` where index ``i`` applies to paths with
             ``i`` mediators. If None, defaults to all ones.
 
     Returns:
