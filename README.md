@@ -111,6 +111,44 @@ The end-to-end workflow follows three steps:
 simulated ground-truth system and a real INDRA network (EGFR inhibition),
 from graph construction through interventional inference. Start there.
 
+### Getting a prior network from INDRA
+
+Step 1 above needs an INDRA-derived graph to filter and query. There are two ways
+to get one:
+
+- **Local INDRA snapshot (recommended, offline).** Load a pre-cached INDRA
+  network — e.g. a `networkx.DiGraph` pickled from an INDRA CoGEx export — and
+  filter it with `prepare_graph`:
+
+  ```python
+  import pickle
+  from causomic.graph_construction import prepare_graph, query_forward_paths
+
+  with open("indranet_dir_graph_fix_corr_weights.pkl", "rb") as f:
+      indra_graph = pickle.load(f)
+
+  filtered_graph = prepare_graph(
+      indra_graph,
+      measured_nodes=None,          # or your list of measured gene symbols
+      node_types=["HGNC"],
+      stmt_types=["IncreaseAmount", "DecreaseAmount"],
+  )
+
+  prior_edges = query_forward_paths(
+      filtered_graph, start_nodes=["EGFR"], end_nodes=["ERK"], n_mediators=2,
+  )
+  ```
+
+  This is the pattern used throughout the lab's own projects and requires no
+  live database connection — only a local copy of the INDRA graph pickle.
+
+- **Live Neo4j query (alternative).** `extract_indra_prior` queries a running
+  INDRA CoGEx Neo4j instance directly and is useful if you need up-to-date
+  statements rather than a static snapshot. It requires the optional
+  [INDRA-CoGEx install](#optional-dependencies) and a reachable Neo4j database
+  with credentials (`Neo4jClient(url=..., auth=(...))`) — see its docstring
+  for the full query example.
+
 ## Data Requirements
 
 ### Input Data Format
@@ -135,6 +173,11 @@ network with experimental data.
 - `query_drug_targets`, `query_effect_nodes`, `query_forward_paths`, `query_confounders`
 - `prepare_indra_priors`, `run_bootstrap`, `calculate_edge_probabilities`
 
+  `query_forward_paths` is the built-in control for maximum path length /
+  mediator count between a source and target node — its `n_mediators`
+  argument caps how many intermediate nodes a path may have, so you don't
+  need to reimplement path-length pruning yourself.
+
 ### 🎯 **Causal Modeling** (`causomic.causal_model`)
 Probabilistic structural causal models for intervention prediction.
 - `LVM` — latent-variable model (fit / intervention interface)
@@ -153,12 +196,15 @@ Synthetic graph and data generation for testing and method development.
 - `generate_structured_dag`, `generate_indra_data`, `generate_cyclic_graph`
 
 ### 🚀 **High-Level Entry Points**
-- `causomic.network` — network estimation helpers (`extract_indra_prior`,
-  `consensus_dag`, `estimate_posterior_dag`, `filter_to_causal_subgraph`, …)
-- `causomic.workflows` — packaged pipelines (`run_toxicity_detection_workflow`)
+- `causomic.network` — network estimation helpers (`estimate_posterior_dag`,
+  `filter_to_causal_subgraph`, `repair_confounding`, `extract_indra_prior`, …)
+- `causomic.workflows` — packaged pipelines (`run_causal_workflow`,
+  `run_toxicity_detection_workflow`)
 
-  Some of these helpers query INDRA-CoGEx and require the optional
-  [INDRA-CoGEx install](#optional-dependencies).
+  `extract_indra_prior` queries INDRA-CoGEx live and requires the optional
+  [INDRA-CoGEx install](#optional-dependencies); most projects instead load a
+  local INDRA graph pickle and call `prepare_graph` directly (see
+  [Getting a prior network from INDRA](#getting-a-prior-network-from-indra)).
 
 ## Documentation
 

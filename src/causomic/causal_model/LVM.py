@@ -113,6 +113,13 @@ class LVM:
         Minimum loss improvement to reset patience counter (Pyro only)
     informative_priors : dict, optional
         Dictionary specifying informative priors for model parameters
+    seed : int, default=1234
+        Random seed used to initialize inference (Pyro only, via
+        ``pyro.set_rng_seed``). Fitting the same data/graph with the same
+        seed is deterministic. To get run-to-run variation (e.g. for
+        bootstrap-style uncertainty estimates), either pass a different seed
+        or bootstrap/resample the input data between fits rather than
+        relying on inference randomness.
     verbose : bool, default=False
         Whether to print detailed progress information during model fitting
 
@@ -208,6 +215,7 @@ class LVM:
         patience: int = 75,
         min_delta: float = 50,
         informative_priors: Optional[Dict[str, Dict[str, float]]] = None,
+        seed: int = 1234,
         verbose: bool = False,
         stochastic_edges: bool = False,
     ):
@@ -227,6 +235,7 @@ class LVM:
         self.patience = patience
         self.min_delta = min_delta
         self.informative_priors = informative_priors
+        self.seed = seed
         self.verbose = verbose
         self.stochastic_edges = stochastic_edges
 
@@ -785,8 +794,8 @@ class LVM:
         if verbose is None:
             verbose = self.verbose
 
-        # Set random seed for reproducibility
-        pyro.set_rng_seed(1234)
+        # Set random seed for reproducibility (see LVM(seed=...) to override)
+        pyro.set_rng_seed(self.seed)
 
         # Initialize the model
         model_cls = (
@@ -1150,13 +1159,20 @@ class LVM:
         ----------
         intervention : Dict[str, float]
             Dictionary specifying the intervention. Keys are variable names
-            and values are the intervention levels.
+            and values are the intervention levels, given as ABSOLUTE/raw
+            target-scale values in the same units the model was fit on (e.g.
+            log2 abundance) — NOT deltas or fold-changes relative to baseline,
+            despite "intervention" reading as "the change to apply". The
+            model internally scales these values with the same
+            mean/std learned in ``fit``, so pass values on the original data
+            scale.
             Example: {"Treatment": 1.0} or {"Drug_A": 2.0, "Drug_B": 1.5}
         outcome_node : Union[str, List[str]]
             Name of the outcome variable or list of outcome variables to measure the intervention effect on
         compare_value : float, default=0.0
-            Baseline value for comparison (control condition)
-        predictive_samples : int, default=1000
+            Baseline value for comparison (control condition), also on the
+            absolute target scale (see ``intervention`` above).
+        predictive_samples : int, default=100
             Number of posterior samples to draw for estimating outcomes
 
         Sets
@@ -1188,6 +1204,21 @@ class LVM:
 
         >>> lvm.intervention({"Drug_A": 2.0, "Drug_B": 1.5}, "Survival")
         >>> effect_size = (lvm.intervention_samples - lvm.posterior_samples).mean()
+
+        Converting a fold-change to an absolute intervention value:
+
+        Since ``intervention`` and ``compare_value`` are absolute levels, a
+        measured fold-change must be converted to the model's scale first.
+        If the data (and therefore the fit) is in log2 space, a fold-change
+        multiplies on the natural scale but *adds* on the log2 scale:
+
+        >>> baseline_mean = float(observational_data["Treatment"].mean())
+        >>> fold_change = 2.0  # e.g. a 2x increase measured experimentally
+        >>> intervention_value = baseline_mean + np.log2(fold_change)
+        >>> lvm.intervention(
+        ...     {"Treatment": intervention_value}, "Outcome",
+        ...     compare_value=baseline_mean,
+        ... )
 
         Note
         ----
