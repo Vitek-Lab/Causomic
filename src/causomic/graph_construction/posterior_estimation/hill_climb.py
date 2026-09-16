@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from pgmpy.base import DAG
 from pgmpy.estimators import ExpertKnowledge, HillClimbSearch
+from pgmpy.estimators.ScoreCache import ScoreCache
 from pgmpy.estimators.StructureScore import get_scoring_method
 from tqdm.auto import trange
 
@@ -56,6 +57,10 @@ class SparseHillClimb(HillClimbSearch):
         If None, falls back to standard HillClimbSearch behavior
     use_cache : bool, default=True
         Whether to cache scoring computations for efficiency
+    cache_size : Optional[int], default=None
+        Maximum number of local scores held in the score cache. ``None`` sizes it
+        from the candidate-edge count, which is what keeps runtime linear in the
+        prior size -- see :meth:`_resolve_cache_size`.
     **kwargs
         Additional arguments passed to parent HillClimbSearch class
 
@@ -87,15 +92,44 @@ class SparseHillClimb(HillClimbSearch):
     large biological networks.
     """
 
+    # Measured on hub-heavy priors: the distinct (variable, parent-set) keys a whole
+    # search touches sit at ~3x the candidate-edge count, because a candidate is
+    # re-keyed each time its child's parent set changes. Sizing the cache above that
+    # working set is what keeps runtime linear in prior size; pgmpy's fixed 10_000
+    # default starts evicting near ~3_500 candidate edges, and once iteration t's
+    # entries are gone before iteration t+1 reuses them every candidate pays a fresh
+    # GLM fit (measured 22x slower at the point the cache is undersized).
+    _CACHE_KEYS_PER_CANDIDATE = 4
+    _CACHE_SIZE_FLOOR = 10_000
+
     def __init__(
         self,
         data: pd.DataFrame,
         allowed_additions: Optional[Iterable[Tuple[str, str]]] = None,
         use_cache: bool = True,
+        cache_size: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(data, use_cache=use_cache, **kwargs)
         self.allowed_additions = set(allowed_additions) if allowed_additions else None
+        self.cache_size = cache_size
+
+    def _resolve_cache_size(self) -> int:
+        """Score-cache capacity: explicit if given, else scaled to the candidate count.
+
+        At ~248 bytes per entry this stays cheap -- a 20_000-edge prior asks for
+        ~80_000 entries (~20 MB), paid once per worker process.
+        """
+        if self.cache_size is not None:
+            return int(self.cache_size)
+
+        if self.allowed_additions is not None:
+            n_candidates = len(self.allowed_additions)
+        else:
+            n_vars = len(self.variables)
+            n_candidates = n_vars * (n_vars - 1)
+
+        return max(self._CACHE_SIZE_FLOOR, self._CACHE_KEYS_PER_CANDIDATE * n_candidates)
 
     def estimate(
         self,
@@ -168,7 +202,13 @@ class SparseHillClimb(HillClimbSearch):
         Constraint enforcement significantly reduces computational complexity
         compared to unconstrained search, especially for large biological networks.
         """
-        score, score_c = get_scoring_method(scoring_method, self.data, self.use_cache)
+        # Wrap the cache here rather than letting get_scoring_method do it: its
+        # ScoreCache is hard-coded to max_size=10_000, which is far below the working
+        # set of a large prior. Passing use_cache=False and wrapping ourselves also
+        # avoids double-wrapping a ScoreCache handed in as `scoring_method`.
+        score, score_c = get_scoring_method(scoring_method, self.data, False)
+        if self.use_cache and not isinstance(score_c, ScoreCache):
+            score_c = ScoreCache(score_c, self.data, max_size=self._resolve_cache_size())
         score_fn = score_c.local_score
 
         if start_dag is None:
@@ -184,6 +224,20 @@ class SparseHillClimb(HillClimbSearch):
         tabu_list = deque(maxlen=tabu_length)
         current_model = start_dag
 
+        # Build the constraint sets ONCE. These never change during a search, but
+        # `_legal_operations` used to re-copy them on every iteration -- and callers
+        # (e.g. causomic.network.estimate_posterior_dag) pass the full O(n^2)
+        # complement of the prior as `forbidden_edges`, which is ~4M pairs at 2000
+        # columns and cost ~340 ms per iteration just to copy.
+        forbidden = frozenset(expert_knowledge.forbidden_edges)
+        required = frozenset(expert_knowledge.required_edges)
+        if self.allowed_additions is not None:
+            # Every forbidden pair is only ever tested against a candidate drawn from
+            # `allowed_additions` (additions directly, flips via their reverse), so
+            # the overlap decides every check the full set would. Shrinking to it is
+            # exact, and collapses the complement-style list to near-nothing.
+            forbidden = forbidden & self.allowed_additions
+
         it = trange(int(max_iter)) if show_progress else range(int(max_iter))
         for t in it:
             best_op, best_delta = max(
@@ -193,8 +247,8 @@ class SparseHillClimb(HillClimbSearch):
                     score.structure_prior_ratio,
                     tabu_list,
                     max_indegree,
-                    expert_knowledge.forbidden_edges,
-                    expert_knowledge.required_edges,
+                    forbidden,
+                    required,
                 ),
                 key=lambda x: x[1],
                 default=(None, None),
@@ -294,33 +348,66 @@ class SparseHillClimb(HillClimbSearch):
                 set(permutations(self.variables, 2)) - existing - {(y, x) for (x, y) in existing}
             )
 
-        forbidden = set(forbidden_edges)
-        required = set(required_edges)
+        forbidden = (
+            forbidden_edges
+            if isinstance(forbidden_edges, (set, frozenset))
+            else set(forbidden_edges)
+        )
+        required = (
+            required_edges if isinstance(required_edges, (set, frozenset)) else set(required_edges)
+        )
 
+        sp_add = structure_score("+")
+        sp_remove = structure_score("-")
+        sp_flip = structure_score("flip")
+
+        # Group candidate additions by child. Everything a candidate needs except the
+        # new parent itself -- the current parent set, the indegree headroom, the base
+        # score, and the reachable set for the cycle check -- depends only on the
+        # child, so a hub with d candidate parents does that work once instead of d
+        # times. The cycle check in particular drops from d bidirectional searches to
+        # a single descendant traversal.
+        by_child: dict = {}
         for X, Y in potential:
-            op = ("+", (X, Y))
-            # cheap checks first; avoid expensive path query early
-            if (op in tabu) or ((X, Y) in forbidden):
-                continue
-            # cycle check
-            if nx.has_path(model, Y, X):
-                continue
-            parents_old = model.get_parents(Y)
-            if len(parents_old) + 1 <= max_indegree:
-                delta = score(Y, parents_old + [X]) - score(Y, parents_old)
-                delta += structure_score("+")
-                yield (op, delta)
+            if X != Y:
+                by_child.setdefault(Y, []).append(X)
 
-        # --- REMOVE: only current edges (unchanged)
-        for X, Y in list(existing):
+        for Y, parents_new in by_child.items():
+            parents_old = model.get_parents(Y)
+            if len(parents_old) + 1 > max_indegree:
+                continue
+
+            descendants = None
+            base = None
+            for X in parents_new:
+                op = ("+", (X, Y))
+                # cheap checks first; avoid expensive path query early
+                if (op in tabu) or ((X, Y) in forbidden):
+                    continue
+                # cycle check: X reachable from Y means Y~>X, so adding X->Y closes a
+                # loop. Same test as has_path(model, Y, X), computed once per child.
+                if descendants is None:
+                    descendants = nx.descendants(model, Y)
+                if X in descendants:
+                    continue
+                if base is None:
+                    base = score(Y, parents_old)
+                yield (op, score(Y, parents_old + [X]) - base + sp_add)
+
+        # --- REMOVE: only current edges
+        removable: dict = {}
+        for X, Y in existing:
             op = ("-", (X, Y))
             if (op in tabu) or ((X, Y) in required):
                 continue
+            removable.setdefault(Y, []).append(X)
+
+        for Y, parents_drop in removable.items():
             p_old = model.get_parents(Y)
-            p_new = [v for v in p_old if v != X]
-            delta = score(Y, p_new) - score(Y, p_old)
-            delta += structure_score("-")
-            yield (op, delta)
+            base = score(Y, p_old)
+            for X in parents_drop:
+                p_new = [v for v in p_old if v != X]
+                yield (("-", (X, Y)), score(Y, p_new) - base + sp_remove)
 
         # --- FLIP: only if reverse is allowed (if using allowed_additions)
         for X, Y in list(existing):
@@ -336,20 +423,21 @@ class SparseHillClimb(HillClimbSearch):
             # Y->X closes a loop), so we must test that direction. The previous
             # check used has_path(Y, X), which let cycle-creating flips through and
             # produced non-DAG search outputs.
+            Xp = model.get_parents(X)
+            Yp = model.get_parents(Y)
+            if len(Xp) + 1 > max_indegree:
+                continue
+
             model.remove_edge(X, Y)
             if nx.has_path(model, X, Y):
                 model.add_edge(X, Y)
                 continue
             model.add_edge(X, Y)
 
-            Xp = model.get_parents(X)
-            Yp = model.get_parents(Y)
-            if len(Xp) + 1 <= max_indegree:
-                delta = (score(X, Xp + [Y]) - score(X, Xp)) + (
-                    score(Y, [v for v in Yp if v != X]) - score(Y, Yp)
-                )
-                delta += structure_score("flip")
-                yield (op, delta)
+            delta = (score(X, Xp + [Y]) - score(X, Xp)) + (
+                score(Y, [v for v in Yp if v != X]) - score(Y, Yp)
+            )
+            yield (op, delta + sp_flip)
 
 
 def random_acyclic_subgraph(nodes, allowed_edges, inclusion_prob=0.15, rng=None, max_indegree=2):
