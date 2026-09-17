@@ -18,8 +18,10 @@ resample so that arm membership survives shuffling, with
 """
 
 import logging
+from contextlib import contextmanager
 from typing import Optional
 
+import joblib
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -35,6 +37,24 @@ from causomic.graph_construction.posterior_estimation.edge_priors import (
 from causomic.graph_construction.posterior_estimation.hill_climb import (
     random_acyclic_subgraph,
 )
+
+
+@contextmanager
+def _tqdm_joblib(tqdm_object):
+    """Update ``tqdm`` based on job completion in ``joblib.Parallel``."""
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+
+    class TqdmBatchCompletionCallback(old_batch_callback):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()
 
 
 def _resample_with_arm_floor(
@@ -379,25 +399,26 @@ def run_bootstrap(
 
     if verbose:
         print("INFO: Running bootstrap.")
-    bootstrap_dags = Parallel(n_jobs=-2)(
-        delayed(process_bootstrap)(
-            data,
-            edge_probabilities,
-            prior_strength,
-            scoring_function,
-            search_algorithm,
-            expert_knowledge,
-            seed=i,
-            random_init=random_init,
-            subsample_frac=subsample_frac,
-            replace=replace,
-            interventional=interventional,
-            arm_labels=arm_labels,
-            clamped_nodes=clamped_nodes,
-            arm_resample_floor=arm_resample_floor,
+    with _tqdm_joblib(tqdm(total=n_bootstrap, desc="Hill Climb runs")):
+        bootstrap_dags = Parallel(n_jobs=-2)(
+            delayed(process_bootstrap)(
+                data,
+                edge_probabilities,
+                prior_strength,
+                scoring_function,
+                search_algorithm,
+                expert_knowledge,
+                seed=i,
+                random_init=random_init,
+                subsample_frac=subsample_frac,
+                replace=replace,
+                interventional=interventional,
+                arm_labels=arm_labels,
+                clamped_nodes=clamped_nodes,
+                arm_resample_floor=arm_resample_floor,
+            )
+            for i in range(n_bootstrap)
         )
-        for i in tqdm(range(n_bootstrap), desc="Hill Climb runs")
-    )
     # for _ in range(n_bootstrap):
     #     process_bootstrap(
     #         data,
